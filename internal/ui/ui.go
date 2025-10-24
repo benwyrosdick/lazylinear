@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jroimartin/gocui"
 	"lazylinear/internal/api"
@@ -79,6 +80,12 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("", 'h', gocui.ModNone, ui.toggleHelp); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("", 'a', gocui.ModNone, ui.toggleAssigned); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("", '/', gocui.ModNone, ui.toggleSearch); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.selectIssue); err != nil {
 		return nil, err
 	}
@@ -101,7 +108,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 
 	// Issues list (left side)
-	issuesX := int(0.6 * float32(maxX))
+	issuesX := int(0.4 * float32(maxX))
 	v, err := g.SetView("issues", 0, 0, issuesX, maxY-3)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
@@ -227,6 +234,7 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 			ui.issues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", err)}}
 		}
 	}
+	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
 	return nil
 }
@@ -242,4 +250,30 @@ func (ui *UI) selectIssue(g *gocui.Gui, v *gocui.View) error {
 func (ui *UI) toggleHelp(g *gocui.Gui, v *gocui.View) error {
 	ui.showHelp = !ui.showHelp
 	return nil
+}
+
+func (ui *UI) toggleAssigned(g *gocui.Gui, v *gocui.View) error {
+	ui.assignedToMe = !ui.assignedToMe
+	ui.issues = ui.filterIssues()
+	ui.selectedIssue = -1
+	return nil
+}
+
+func (ui *UI) toggleSearch(g *gocui.Gui, v *gocui.View) error {
+	ui.showSearch = !ui.showSearch
+	return nil
+}
+
+func (ui *UI) filterIssues() []api.Issue {
+	var filtered []api.Issue
+	for _, issue := range ui.issues {
+		if ui.assignedToMe && issue.Assignee.ID != ui.viewerID {
+			continue
+		}
+		if ui.searchString != "" && !strings.Contains(strings.ToLower(issue.Title), strings.ToLower(ui.searchString)) {
+			continue
+		}
+		filtered = append(filtered, issue)
+	}
+	return filtered
 }
