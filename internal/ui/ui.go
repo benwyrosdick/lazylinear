@@ -171,6 +171,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if ui.assignedToMe {
 		viewTitle = viewTitle + " (My Issues)"
 	}
+	if ui.searchString != "" {
+		viewTitle = viewTitle + " [" + ui.searchString + "]"
+	}
 	v.Title = viewTitle
 
 	// Update issues list
