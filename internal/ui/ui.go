@@ -14,6 +14,7 @@ type UI struct {
 	gui           *gocui.Gui
 	client        *api.Client
 	issues        []api.Issue
+	allIssues     []api.Issue
 	selectedIssue int
 	showHelp      bool
 	showSearch    bool
@@ -31,10 +32,14 @@ func NewUI(client *api.Client) (*UI, error) {
 
 	// Fetch issues
 	var issues []api.Issue
+	var viewerID string
 	var apiErr error
 	var fetchedIssues []api.Issue
 	if client != nil {
 		fetchedIssues, apiErr = client.GetIssues(context.Background())
+		if viewer, err := client.GetViewer(context.Background()); err == nil {
+			viewerID = viewer.ID
+		}
 	} else {
 		apiErr = fmt.Errorf("no client")
 	}
@@ -48,12 +53,13 @@ func NewUI(client *api.Client) (*UI, error) {
 		gui:           g,
 		client:        client,
 		issues:        issues,
+		allIssues:     issues,
 		selectedIssue: -1,
 		showHelp:      false,
 		showSearch:    false,
 		searchString:  "",
 		assignedToMe:  false,
-		viewerID:      "",
+		viewerID:      viewerID,
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -89,6 +95,12 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.selectIssue); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("search", gocui.KeyEsc, gocui.ModNone, ui.cancelSearch); err != nil {
+		return nil, err
+	}
 
 	return ui, nil
 }
@@ -107,9 +119,30 @@ func (ui *UI) Close() {
 func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 
+	// Search bar (if enabled)
+	if ui.showSearch {
+		if v, err := g.SetView("search", 0, maxY-4, maxX-1, maxY-2); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			v.Title = "Search (Enter to apply, Esc to cancel)"
+			v.Editable = true
+			v.Editor = gocui.DefaultEditor
+			g.SetCurrentView("search")
+			fmt.Fprint(v, ui.searchString)
+			v.SetCursor(len(ui.searchString), 0)
+		}
+	} else {
+		g.DeleteView("search")
+	}
+
 	// Issues list (left side)
 	issuesX := int(0.4 * float32(maxX))
-	v, err := g.SetView("issues", 0, 0, issuesX, maxY-3)
+	bottomY := maxY - 3
+	if ui.showSearch {
+		bottomY = maxY - 5
+	}
+	v, err := g.SetView("issues", 0, 0, issuesX, bottomY)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
@@ -136,11 +169,13 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	}
 
-	// Set focus to issues view
-	g.SetCurrentView("issues")
+	// Set focus to issues view (unless search is active)
+	if !ui.showSearch {
+		g.SetCurrentView("issues")
+	}
 
 	// Issue details (right side)
-	dv, err := g.SetView("details", issuesX+1, 0, maxX-1, maxY-3)
+	dv, err := g.SetView("details", issuesX+1, 0, maxX-1, bottomY)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
@@ -187,12 +222,26 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 
 	// Status bar (bottom)
-	if v, err := g.SetView("status", 0, maxY-2, maxX-1, maxY-1); err != nil {
+	statusY := maxY - 2
+	if ui.showSearch {
+		statusY = maxY - 1
+	}
+	if v, err := g.SetView("status", 0, statusY, maxX-1, maxY); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
 		v.Frame = false
-		fmt.Fprintln(v, "j/k/↑/↓: navigate | Enter: select | r: refresh | h: help | Ctrl+C: quit")
+	}
+	if sv, err := g.View("status"); err == nil {
+		sv.Clear()
+		status := "j/k/↑/↓: navigate | Enter: select | r: refresh | /: search | a: my issues | h: help | Ctrl+C: quit"
+		if ui.assignedToMe {
+			status = "[My Issues] " + status
+		}
+		if ui.searchString != "" {
+			status = fmt.Sprintf("[Search: %s] %s", ui.searchString, status)
+		}
+		fmt.Fprintln(sv, status)
 	}
 
 	return nil
@@ -229,9 +278,9 @@ func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
 func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 	if ui.client != nil {
 		if fetchedIssues, err := ui.client.GetIssues(context.Background()); err == nil {
-			ui.issues = fetchedIssues
+			ui.allIssues = fetchedIssues
 		} else {
-			ui.issues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", err)}}
+			ui.allIssues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", err)}}
 		}
 	}
 	ui.issues = ui.filterIssues()
@@ -261,12 +310,36 @@ func (ui *UI) toggleAssigned(g *gocui.Gui, v *gocui.View) error {
 
 func (ui *UI) toggleSearch(g *gocui.Gui, v *gocui.View) error {
 	ui.showSearch = !ui.showSearch
+	if ui.showSearch {
+		g.SetCurrentView("search")
+	}
+	return nil
+}
+
+func (ui *UI) closeSearch(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		ui.searchString = strings.TrimSpace(v.Buffer())
+		ui.issues = ui.filterIssues()
+		ui.selectedIssue = -1
+	}
+	ui.showSearch = false
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) cancelSearch(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		v.Clear()
+		v.SetCursor(0, 0)
+	}
+	ui.showSearch = false
+	g.SetCurrentView("issues")
 	return nil
 }
 
 func (ui *UI) filterIssues() []api.Issue {
 	var filtered []api.Issue
-	for _, issue := range ui.issues {
+	for _, issue := range ui.allIssues {
 		if ui.assignedToMe && issue.Assignee.ID != ui.viewerID {
 			continue
 		}
