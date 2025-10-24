@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sort"
 
 	"github.com/machinebox/graphql"
 )
@@ -82,11 +83,17 @@ func (c *Client) GetViewer(ctx context.Context) (*Viewer, error) {
 	return &resp.Viewer, nil
 }
 
-// GetIssues fetches issues from Linear
+// GetIssues fetches issues from Linear filtered by specified states
 func (c *Client) GetIssues(ctx context.Context) ([]Issue, error) {
 	req := graphql.NewRequest(`
 		query {
-			issues {
+			issues(filter: {
+				state: {
+					name: {
+						in: ["In Review", "In Progress", "Blocked", "Todo", "Backlog"]
+					}
+				}
+			}) {
 				nodes {
 					id
 					title
@@ -127,5 +134,29 @@ func (c *Client) GetIssues(ctx context.Context) ([]Issue, error) {
 		return nil, err
 	}
 
-	return resp.Issues.Nodes, nil
+	issues := resp.Issues.Nodes
+
+	stateOrder := map[string]int{
+		"In Review":   0,
+		"In Progress": 1,
+		"Blocked":     2,
+		"Todo":        3,
+		"Backlog":     4,
+	}
+
+	sort.SliceStable(issues, func(i, j int) bool {
+		orderI, okI := stateOrder[issues[i].State.Name]
+		orderJ, okJ := stateOrder[issues[j].State.Name]
+
+		if !okI {
+			orderI = 999
+		}
+		if !okJ {
+			orderJ = 999
+		}
+
+		return orderI < orderJ
+	})
+
+	return issues, nil
 }
