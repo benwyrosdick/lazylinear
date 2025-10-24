@@ -108,6 +108,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("search", gocui.KeyCtrlQ, gocui.ModNone, ui.cancelSearch); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("search", gocui.KeyEsc, gocui.ModNone, ui.cancelSearch); err != nil {
 		return nil, err
 	}
@@ -135,13 +138,15 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			v.Title = "Search (Enter to apply, Esc to cancel)"
+			v.Title = "Search (Enter to apply, Ctrl+Q to cancel)"
 			v.Editable = true
 			v.Editor = gocui.DefaultEditor
-			g.SetCurrentView("search")
 			fmt.Fprint(v, ui.searchString)
 			v.SetCursor(len(ui.searchString), 0)
+		} else {
+			v.Title = "Search (Enter to apply, Ctrl+Q to cancel)"
 		}
+		g.SetCurrentView("search")
 	} else {
 		g.DeleteView("search")
 	}
@@ -347,6 +352,9 @@ func (ui *UI) cancelSearch(g *gocui.Gui, v *gocui.View) error {
 		v.Clear()
 		v.SetCursor(0, 0)
 	}
+	ui.searchString = ""
+	ui.issues = ui.filterIssues()
+	ui.selectedIssue = -1
 	ui.showSearch = false
 	g.SetCurrentView("issues")
 	return nil
