@@ -21,6 +21,8 @@ type UI struct {
 	searchString  string
 	assignedToMe  bool
 	viewerID      string
+	currentView   int
+	views         []string
 }
 
 // NewUI creates a new UI instance
@@ -60,6 +62,8 @@ func NewUI(client *api.Client) (*UI, error) {
 		searchString:  "",
 		assignedToMe:  false,
 		viewerID:      viewerID,
+		currentView:   0,
+		views:         []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -90,6 +94,12 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", '/', gocui.ModNone, ui.toggleSearch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", '[', gocui.ModNone, ui.prevView); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", ']', gocui.ModNone, ui.nextView); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.selectIssue); err != nil {
@@ -147,11 +157,16 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Title = "Issues"
 		v.Highlight = true
 		v.SelBgColor = gocui.ColorGreen
 		v.SelFgColor = gocui.ColorBlack
 	}
+
+	viewTitle := ui.views[ui.currentView]
+	if ui.assignedToMe {
+		viewTitle = viewTitle + " (My Issues)"
+	}
+	v.Title = viewTitle
 
 	// Update issues list
 	v.Clear()
@@ -234,7 +249,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 	if sv, err := g.View("status"); err == nil {
 		sv.Clear()
-		status := "j/k/↑/↓: navigate | Enter: select | r: refresh | /: search | a: my issues | h: help | Ctrl+C: quit"
+		status := "j/k/↑/↓: navigate | [/]: switch view | Enter: select | r: refresh | /: search | a: my issues | h: help | Ctrl+C: quit"
 		if ui.assignedToMe {
 			status = "[My Issues] " + status
 		}
@@ -337,10 +352,35 @@ func (ui *UI) cancelSearch(g *gocui.Gui, v *gocui.View) error {
 	return nil
 }
 
+func (ui *UI) prevView(g *gocui.Gui, v *gocui.View) error {
+	ui.currentView--
+	if ui.currentView < 0 {
+		ui.currentView = len(ui.views) - 1
+	}
+	ui.issues = ui.filterIssues()
+	ui.selectedIssue = -1
+	return nil
+}
+
+func (ui *UI) nextView(g *gocui.Gui, v *gocui.View) error {
+	ui.currentView++
+	if ui.currentView >= len(ui.views) {
+		ui.currentView = 0
+	}
+	ui.issues = ui.filterIssues()
+	ui.selectedIssue = -1
+	return nil
+}
+
 func (ui *UI) filterIssues() []api.Issue {
 	var filtered []api.Issue
+	currentViewName := ui.views[ui.currentView]
+
 	for _, issue := range ui.allIssues {
 		if ui.assignedToMe && issue.Assignee.ID != ui.viewerID {
+			continue
+		}
+		if currentViewName != "All" && issue.State.Name != currentViewName {
 			continue
 		}
 		if ui.searchString != "" && !strings.Contains(strings.ToLower(issue.Title), strings.ToLower(ui.searchString)) {
