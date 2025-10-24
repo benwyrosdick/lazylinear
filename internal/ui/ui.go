@@ -80,16 +80,16 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", 'k', gocui.ModNone, ui.cursorUp); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("", 'r', gocui.ModNone, ui.refreshIssues); err != nil {
+	if err := g.SetKeybinding("issues", 'r', gocui.ModNone, ui.refreshIssues); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("", 'h', gocui.ModNone, ui.toggleHelp); err != nil {
+	if err := g.SetKeybinding("issues", 'h', gocui.ModNone, ui.toggleHelp); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("", 'a', gocui.ModNone, ui.toggleAssigned); err != nil {
+	if err := g.SetKeybinding("issues", 'a', gocui.ModNone, ui.toggleAssigned); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("", '/', gocui.ModNone, ui.toggleSearch); err != nil {
+	if err := g.SetKeybinding("issues", '/', gocui.ModNone, ui.toggleSearch); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.selectIssue); err != nil {
