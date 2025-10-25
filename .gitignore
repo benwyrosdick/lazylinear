@@ -1,1 +1,21 @@
-dist/
+# Ignore the built binary
+lazylinear
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Output of go build, go run
+*.out
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
