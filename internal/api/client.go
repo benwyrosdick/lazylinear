@@ -27,6 +27,7 @@ func NewClient(apiKey string) *Client {
 // Issue represents a Linear issue
 type Issue struct {
 	ID          string `json:"id"`
+	Identifier  string `json:"identifier"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	URL         string `json:"url"`
@@ -139,6 +140,7 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 			}) {
 				nodes {
 					id
+					identifier
 					title
 					description
 					url
@@ -175,6 +177,7 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 			}) {
 				nodes {
 					id
+					identifier
 					title
 					description
 					url

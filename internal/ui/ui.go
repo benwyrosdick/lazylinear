@@ -167,20 +167,18 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 	if tv, err := g.View("teams"); err == nil {
 		tv.Clear()
-		teamTitle := "Teams: "
 		if len(ui.teams) > 0 {
 			for i, team := range ui.teams {
 				if i == ui.currentTeam {
-					teamTitle += fmt.Sprintf("[%s] ", team.Name)
+					fmt.Fprintf(tv, "\033[32m%s\033[0m ", "[ "+team.Name+" ]")
 				} else {
-					teamTitle += fmt.Sprintf("%s ", team.Name)
+					fmt.Fprintf(tv, "%s ", team.Name)
 				}
 			}
 		} else {
-			teamTitle += "All"
+			fmt.Fprint(tv, "All")
 		}
-		teamTitle += " ({/} to switch)"
-		tv.Title = teamTitle
+		tv.Title = "Teams ({/} to switch)"
 	}
 
 	// Search bar (if enabled)
@@ -230,15 +228,28 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// Update issues list
 	v.Clear()
 	for _, issue := range ui.issues {
-		fmt.Fprintln(v, issue.Title)
+		initials := "--"
+		if issue.Assignee.Name != "" {
+			parts := strings.Fields(issue.Assignee.Name)
+			if len(parts) >= 2 {
+				initials = string(parts[0][0]) + string(parts[1][0])
+			} else if len(parts) == 1 {
+				if len(parts[0]) >= 2 {
+					initials = string(parts[0][0]) + string(parts[0][1])
+				} else {
+					initials = parts[0]
+				}
+			}
+		}
+		fmt.Fprintf(v, "\033[32m%s\033[0m \033[33m%s\033[0m %s\n", issue.Identifier, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
 	if len(ui.issues) > 0 {
-		cx, cy := v.Cursor()
+		_, cy := v.Cursor()
 		if cy >= len(ui.issues) {
-			v.SetCursor(0, 0)
-		} else if cx < 0 || cy < 0 {
+			v.SetCursor(0, len(ui.issues)-1)
+		} else if cy < 0 {
 			v.SetCursor(0, 0)
 		}
 	}
@@ -332,11 +343,18 @@ func (ui *UI) quit(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
-	if v != nil {
+	if v != nil && len(ui.issues) > 0 {
 		cx, cy := v.Cursor()
+		ox, oy := v.Origin()
+		_, maxY := v.Size()
+
 		if cy < len(ui.issues)-1 {
 			if err := v.SetCursor(cx, cy+1); err != nil {
-				return err
+				if cy+1 >= maxY-1 {
+					if err := v.SetOrigin(ox, oy+1); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -344,10 +362,16 @@ func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
-	if v != nil {
+	if v != nil && len(ui.issues) > 0 {
 		cx, cy := v.Cursor()
+		ox, oy := v.Origin()
+
 		if cy > 0 {
 			if err := v.SetCursor(cx, cy-1); err != nil {
+				return err
+			}
+		} else if oy > 0 {
+			if err := v.SetOrigin(ox, oy-1); err != nil {
 				return err
 			}
 		}
