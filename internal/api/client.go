@@ -251,3 +251,39 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 
 	return issues, nil
 }
+
+// AddComment adds a comment to an issue
+func (c *Client) AddComment(ctx context.Context, issueID string, body string) error {
+	req := graphql.NewRequest(`
+		mutation($issueId: String!, $body: String!) {
+			commentCreate(input: {
+				issueId: $issueId
+				body: $body
+			}) {
+				success
+				comment {
+					id
+				}
+			}
+		}
+	`)
+
+	req.Var("issueId", issueID)
+	req.Var("body", body)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		CommentCreate struct {
+			Success bool `json:"success"`
+		} `json:"commentCreate"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return err
+	}
+
+	return nil
+}

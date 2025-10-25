@@ -12,20 +12,39 @@ import (
 
 // UI manages the terminal user interface
 type UI struct {
-	gui           *gocui.Gui
-	client        *api.Client
-	issues        []api.Issue
-	allIssues     []api.Issue
-	selectedIssue int
-	showHelp      bool
-	showSearch    bool
-	searchString  string
-	assignedToMe  bool
-	viewerID      string
-	currentView   int
-	views         []string
-	teams         []api.Team
-	currentTeam   int
+	gui            *gocui.Gui
+	client         *api.Client
+	issues         []api.Issue
+	allIssues      []api.Issue
+	selectedIssue  int
+	showHelp       bool
+	showSearch     bool
+	searchString   string
+	assignedToMe   bool
+	viewerID       string
+	currentView    int
+	views          []string
+	teams          []api.Team
+	currentTeam    int
+	showComment    bool
+	commentContent string
+}
+
+// commentEditor is a custom editor that handles Esc and Enter keys
+type commentEditor struct {
+	ui *UI
+}
+
+func (e *commentEditor) Edit(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) {
+	if key == gocui.KeyEsc {
+		e.ui.cancelComment(e.ui.gui, v)
+		return
+	}
+	if key == gocui.KeyEnter {
+		gocui.DefaultEditor.Edit(v, key, ch, mod)
+		return
+	}
+	gocui.DefaultEditor.Edit(v, key, ch, mod)
 }
 
 // NewUI creates a new UI instance
@@ -63,20 +82,22 @@ func NewUI(client *api.Client) (*UI, error) {
 	}
 
 	ui := &UI{
-		gui:           g,
-		client:        client,
-		issues:        issues,
-		allIssues:     issues,
-		selectedIssue: -1,
-		showHelp:      false,
-		showSearch:    false,
-		searchString:  "",
-		assignedToMe:  false,
-		viewerID:      viewerID,
-		currentView:   0,
-		views:         []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
-		teams:         teams,
-		currentTeam:   0,
+		gui:            g,
+		client:         client,
+		issues:         issues,
+		allIssues:      issues,
+		selectedIssue:  -1,
+		showHelp:       false,
+		showSearch:     false,
+		searchString:   "",
+		assignedToMe:   false,
+		viewerID:       viewerID,
+		currentView:    0,
+		views:          []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
+		teams:          teams,
+		currentTeam:    0,
+		showComment:    false,
+		commentContent: "",
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -130,6 +151,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", '}', gocui.ModNone, ui.nextTeam); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", 'c', gocui.ModNone, ui.toggleComment); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
 		return nil, err
 	}
@@ -137,6 +161,15 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("search", gocui.KeyEsc, gocui.ModNone, ui.cancelSearch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("comment", gocui.KeyCtrlS, gocui.ModNone, ui.submitComment); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("comment", gocui.KeyCtrlQ, gocui.ModNone, ui.cancelComment); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("comment", gocui.KeyEsc, gocui.ModNone, ui.cancelComment); err != nil {
 		return nil, err
 	}
 
@@ -179,6 +212,30 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprint(tv, "All")
 		}
 		tv.Title = "Teams ({/} to switch)"
+	}
+
+	// Comment pane (if enabled)
+	if ui.showComment {
+		commentWidth := maxX - 20
+		commentHeight := 10
+		commentX := (maxX - commentWidth) / 2
+		commentY := (maxY - commentHeight) / 2
+
+		if cv, err := g.SetView("comment", commentX, commentY, commentX+commentWidth, commentY+commentHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
+			cv.Editable = true
+			cv.Editor = &commentEditor{ui: ui}
+			cv.Wrap = true
+			g.SetCurrentView("comment")
+		} else {
+			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
+			g.SetCurrentView("comment")
+		}
+	} else {
+		g.DeleteView("comment")
 	}
 
 	// Search bar (if enabled)
@@ -254,8 +311,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	}
 
-	// Set focus to issues view (unless search is active)
-	if !ui.showSearch {
+	// Set focus to issues view (unless search or comment is active)
+	if !ui.showSearch && !ui.showComment {
 		g.SetCurrentView("issues")
 	}
 
@@ -285,6 +342,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "  r       : Refresh issues")
 		fmt.Fprintln(dv, "  a       : Toggle filter by assigned to me")
 		fmt.Fprintln(dv, "  /       : Search issues (Enter to apply, Ctrl+Q to cancel)")
+		fmt.Fprintln(dv, "  c       : Add comment to selected issue")
 		fmt.Fprintln(dv, "  ,       : Copy issue URL to clipboard")
 		fmt.Fprintln(dv, "  .       : Copy git branch name to clipboard")
 		fmt.Fprintln(dv, "  h       : Toggle this help")
@@ -444,6 +502,46 @@ func (ui *UI) cancelSearch(g *gocui.Gui, v *gocui.View) error {
 	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
 	ui.showSearch = false
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) toggleComment(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		ui.showComment = true
+		ui.commentContent = ""
+	}
+	return nil
+}
+
+func (ui *UI) submitComment(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		comment := strings.TrimSpace(v.Buffer())
+		if comment != "" && ui.client != nil {
+			issue := ui.issues[ui.selectedIssue]
+			if err := ui.client.AddComment(context.Background(), issue.ID, comment); err != nil {
+				// TODO: Show error to user
+			} else {
+				// Refresh to show new comment
+				ui.refreshIssues(g, v)
+			}
+		}
+		v.Clear()
+		v.SetCursor(0, 0)
+	}
+	ui.showComment = false
+	ui.commentContent = ""
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) cancelComment(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		v.Clear()
+		v.SetCursor(0, 0)
+	}
+	ui.showComment = false
+	ui.commentContent = ""
 	g.SetCurrentView("issues")
 	return nil
 }
