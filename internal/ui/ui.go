@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/jroimartin/gocui"
@@ -103,6 +104,12 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.selectIssue); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", ',', gocui.ModNone, ui.copyURL); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", '.', gocui.ModNone, ui.copyBranch); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
@@ -213,14 +220,19 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "===============")
 		fmt.Fprintln(dv, "")
 		fmt.Fprintln(dv, "Navigation:")
-		fmt.Fprintln(dv, "  j / ↓ : Move down")
-		fmt.Fprintln(dv, "  k / ↑ : Move up")
+		fmt.Fprintln(dv, "  j / ↓   : Move down")
+		fmt.Fprintln(dv, "  k / ↑   : Move up")
+		fmt.Fprintln(dv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
 		fmt.Fprintln(dv, "")
 		fmt.Fprintln(dv, "Actions:")
-		fmt.Fprintln(dv, "  Enter  : Select issue to view details")
-		fmt.Fprintln(dv, "  r      : Refresh issues")
-		fmt.Fprintln(dv, "  h      : Toggle this help")
-		fmt.Fprintln(dv, "  Ctrl+C : Quit")
+		fmt.Fprintln(dv, "  Enter   : Select issue to view details")
+		fmt.Fprintln(dv, "  r       : Refresh issues")
+		fmt.Fprintln(dv, "  a       : Toggle filter by assigned to me")
+		fmt.Fprintln(dv, "  /       : Search issues (Enter to apply, Ctrl+Q to cancel)")
+		fmt.Fprintln(dv, "  ,       : Copy issue URL to clipboard")
+		fmt.Fprintln(dv, "  .       : Copy git branch name to clipboard")
+		fmt.Fprintln(dv, "  h       : Toggle this help")
+		fmt.Fprintln(dv, "  Ctrl+C  : Quit")
 		fmt.Fprintln(dv, "")
 		fmt.Fprintln(dv, "Configuration:")
 		fmt.Fprintln(dv, "  Set your Linear API key in ~/.lazylinear/config.json")
@@ -381,6 +393,58 @@ func (ui *UI) nextView(g *gocui.Gui, v *gocui.View) error {
 	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
 	return nil
+}
+
+func (ui *UI) copyURL(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		issue := ui.issues[ui.selectedIssue]
+		if issue.URL != "" {
+			return ui.copyToClipboard(issue.URL)
+		}
+	}
+	return nil
+}
+
+func (ui *UI) copyBranch(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		issue := ui.issues[ui.selectedIssue]
+		if issue.BranchName != "" {
+			return ui.copyToClipboard(issue.BranchName)
+		}
+	}
+	return nil
+}
+
+func (ui *UI) copyToClipboard(text string) error {
+	cmd := exec.Command("xclip", "-selection", "clipboard")
+	if _, err := exec.LookPath("xclip"); err != nil {
+		cmd = exec.Command("xsel", "--clipboard", "--input")
+		if _, err := exec.LookPath("xsel"); err != nil {
+			cmd = exec.Command("wl-copy")
+			if _, err := exec.LookPath("wl-copy"); err != nil {
+				cmd = exec.Command("pbcopy")
+			}
+		}
+	}
+
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	if _, err := in.Write([]byte(text)); err != nil {
+		return err
+	}
+
+	if err := in.Close(); err != nil {
+		return err
+	}
+
+	return cmd.Wait()
 }
 
 func (ui *UI) filterIssues() []api.Issue {
