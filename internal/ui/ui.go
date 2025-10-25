@@ -24,6 +24,8 @@ type UI struct {
 	viewerID      string
 	currentView   int
 	views         []string
+	teams         []api.Team
+	currentTeam   int
 }
 
 // NewUI creates a new UI instance
@@ -33,13 +35,21 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 
-	// Fetch issues
+	// Fetch teams and issues
 	var issues []api.Issue
+	var teams []api.Team
 	var viewerID string
 	var apiErr error
 	var fetchedIssues []api.Issue
 	if client != nil {
-		fetchedIssues, apiErr = client.GetIssues(context.Background())
+		if fetchedTeams, err := client.GetTeams(context.Background()); err == nil {
+			teams = fetchedTeams
+		}
+		teamID := ""
+		if len(teams) > 0 {
+			teamID = teams[0].ID
+		}
+		fetchedIssues, apiErr = client.GetIssues(context.Background(), teamID)
 		if viewer, err := client.GetViewer(context.Background()); err == nil {
 			viewerID = viewer.ID
 		}
@@ -65,6 +75,8 @@ func NewUI(client *api.Client) (*UI, error) {
 		viewerID:      viewerID,
 		currentView:   0,
 		views:         []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
+		teams:         teams,
+		currentTeam:   0,
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -112,6 +124,12 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", '.', gocui.ModNone, ui.copyBranch); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", '{', gocui.ModNone, ui.prevTeam); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", '}', gocui.ModNone, ui.nextTeam); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
 		return nil, err
 	}
@@ -139,6 +157,32 @@ func (ui *UI) Close() {
 func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 
+	// Teams bar (top)
+	teamBarHeight := 2
+	if tv, err := g.SetView("teams", 0, 0, maxX-1, teamBarHeight); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		tv.Frame = true
+	}
+	if tv, err := g.View("teams"); err == nil {
+		tv.Clear()
+		teamTitle := "Teams: "
+		if len(ui.teams) > 0 {
+			for i, team := range ui.teams {
+				if i == ui.currentTeam {
+					teamTitle += fmt.Sprintf("[%s] ", team.Name)
+				} else {
+					teamTitle += fmt.Sprintf("%s ", team.Name)
+				}
+			}
+		} else {
+			teamTitle += "All"
+		}
+		teamTitle += " ({/} to switch)"
+		tv.Title = teamTitle
+	}
+
 	// Search bar (if enabled)
 	if ui.showSearch {
 		if v, err := g.SetView("search", 0, maxY-4, maxX-1, maxY-2); err != nil {
@@ -164,7 +208,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if ui.showSearch {
 		bottomY = maxY - 5
 	}
-	v, err := g.SetView("issues", 0, 0, issuesX, bottomY)
+	v, err := g.SetView("issues", 0, teamBarHeight+1, issuesX, bottomY)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
@@ -205,7 +249,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 
 	// Issue details (right side)
-	dv, err := g.SetView("details", issuesX+1, 0, maxX-1, bottomY)
+	dv, err := g.SetView("details", issuesX+1, teamBarHeight+1, maxX-1, bottomY)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
@@ -223,6 +267,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "  j / ↓   : Move down")
 		fmt.Fprintln(dv, "  k / ↑   : Move up")
 		fmt.Fprintln(dv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
+		fmt.Fprintln(dv, "  { / }   : Switch team")
 		fmt.Fprintln(dv, "")
 		fmt.Fprintln(dv, "Actions:")
 		fmt.Fprintln(dv, "  Enter   : Select issue to view details")
@@ -312,7 +357,11 @@ func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
 
 func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 	if ui.client != nil {
-		if fetchedIssues, err := ui.client.GetIssues(context.Background()); err == nil {
+		teamID := ""
+		if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+			teamID = ui.teams[ui.currentTeam].ID
+		}
+		if fetchedIssues, err := ui.client.GetIssues(context.Background(), teamID); err == nil {
 			ui.allIssues = fetchedIssues
 		} else {
 			ui.allIssues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", err)}}
@@ -393,6 +442,28 @@ func (ui *UI) nextView(g *gocui.Gui, v *gocui.View) error {
 	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
 	return nil
+}
+
+func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
+	if len(ui.teams) == 0 {
+		return nil
+	}
+	ui.currentTeam--
+	if ui.currentTeam < 0 {
+		ui.currentTeam = len(ui.teams) - 1
+	}
+	return ui.refreshIssues(g, v)
+}
+
+func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
+	if len(ui.teams) == 0 {
+		return nil
+	}
+	ui.currentTeam++
+	if ui.currentTeam >= len(ui.teams) {
+		ui.currentTeam = 0
+	}
+	return ui.refreshIssues(g, v)
 }
 
 func (ui *UI) copyURL(g *gocui.Gui, v *gocui.View) error {

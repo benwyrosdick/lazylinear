@@ -58,6 +58,13 @@ type Viewer struct {
 	Name string `json:"name"`
 }
 
+// Team represents a Linear team
+type Team struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
 // GetViewer fetches the current user
 func (c *Client) GetViewer(ctx context.Context) (*Viewer, error) {
 	req := graphql.NewRequest(`
@@ -85,9 +92,79 @@ func (c *Client) GetViewer(ctx context.Context) (*Viewer, error) {
 	return &resp.Viewer, nil
 }
 
-// GetIssues fetches issues from Linear filtered by specified states
-func (c *Client) GetIssues(ctx context.Context) ([]Issue, error) {
+// GetTeams fetches all teams
+func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 	req := graphql.NewRequest(`
+		query {
+			teams {
+				nodes {
+					id
+					name
+					key
+				}
+			}
+		}
+	`)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		Teams struct {
+			Nodes []Team `json:"nodes"`
+		} `json:"teams"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.Teams.Nodes, nil
+}
+
+// GetIssues fetches issues from Linear filtered by specified states
+func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) {
+	var query string
+	if teamID != "" {
+		query = `
+		query($teamID: ID!) {
+			issues(filter: {
+				team: { id: { eq: $teamID } }
+				state: {
+					name: {
+						in: ["In Review", "In Progress", "Blocked", "Todo", "Backlog"]
+					}
+				}
+			}) {
+				nodes {
+					id
+					title
+					description
+					url
+					branchName
+					state {
+						name
+					}
+					assignee {
+						id
+						name
+					}
+					comments {
+						nodes {
+							body
+							createdAt
+							user {
+								name
+							}
+						}
+					}
+				}
+			}
+		}
+		`
+	} else {
+		query = `
 		query {
 			issues(filter: {
 				state: {
@@ -121,7 +198,14 @@ func (c *Client) GetIssues(ctx context.Context) ([]Issue, error) {
 				}
 			}
 		}
-	`)
+		`
+	}
+
+	req := graphql.NewRequest(query)
+
+	if teamID != "" {
+		req.Var("teamID", teamID)
+	}
 
 	// Set authorization header
 	if c.apiKey != "" {
