@@ -651,15 +651,18 @@ func (ui *UI) copyBranch(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) copyToClipboard(text string) error {
-	cmd := exec.Command("xclip", "-selection", "clipboard")
-	if _, err := exec.LookPath("xclip"); err != nil {
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("xclip"); err == nil {
+		cmd = exec.Command("xclip", "-selection", "clipboard")
+	} else if _, err := exec.LookPath("xsel"); err == nil {
 		cmd = exec.Command("xsel", "--clipboard", "--input")
-		if _, err := exec.LookPath("xsel"); err != nil {
-			cmd = exec.Command("wl-copy")
-			if _, err := exec.LookPath("wl-copy"); err != nil {
-				cmd = exec.Command("pbcopy")
-			}
-		}
+	} else if _, err := exec.LookPath("wl-copy"); err == nil {
+		cmd = exec.Command("wl-copy")
+	} else if _, err := exec.LookPath("pbcopy"); err == nil {
+		cmd = exec.Command("pbcopy")
+	} else {
+		ui.showToast("No clipboard manager found")
+		return nil
 	}
 
 	in, err := cmd.StdinPipe()
