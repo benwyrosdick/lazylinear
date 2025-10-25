@@ -54,6 +54,11 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 
+	// Enable highlighting and set border colors like lazygit
+	g.Highlight = true
+	g.SelFgColor = gocui.ColorGreen  // Active pane border color
+	g.FgColor = gocui.ColorDefault   // Inactive pane border color
+
 	// Fetch teams and issues
 	var issues []api.Issue
 	var teams []api.Team
@@ -234,6 +239,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
 			g.SetCurrentView("comment")
 		}
+
 	} else {
 		g.DeleteView("comment")
 	}
