@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/jroimartin/gocui"
 	"lazylinear/internal/api"
@@ -28,6 +29,8 @@ type UI struct {
 	currentTeam    int
 	showComment    bool
 	commentContent string
+	toastMessage   string
+	toastTimer     *time.Timer
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -62,8 +65,8 @@ func NewUI(client *api.Client) (*UI, error) {
 
 	// Enable highlighting and set border colors like lazygit
 	g.Highlight = true
-	g.SelFgColor = gocui.ColorGreen  // Active pane border color
-	g.FgColor = gocui.ColorDefault   // Inactive pane border color
+	g.SelFgColor = gocui.ColorGreen // Active pane border color
+	g.FgColor = gocui.ColorDefault  // Inactive pane border color
 
 	// Fetch teams and issues
 	var issues []api.Issue
@@ -109,6 +112,8 @@ func NewUI(client *api.Client) (*UI, error) {
 		currentTeam:    0,
 		showComment:    false,
 		commentContent: "",
+		toastMessage:   "",
+		toastTimer:     nil,
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -379,10 +384,36 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "Press 'h' for help")
 	}
 
+	// Toast message (if present)
+	if ui.toastMessage != "" {
+		toastHeight := 3
+		toastY := maxY - toastHeight - 2
+		if ui.showSearch {
+			toastY = maxY - toastHeight - 1
+		}
+		if tv, err := g.SetView("toast", 0, toastY, maxX-1, maxY-1); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			tv.Frame = true
+			tv.Title = "Message"
+			tv.FgColor = gocui.ColorBlue
+		}
+		if tv, err := g.View("toast"); err == nil {
+			tv.Clear()
+			fmt.Fprintln(tv, ui.toastMessage)
+		}
+	} else {
+		g.DeleteView("toast")
+	}
+
 	// Status bar (bottom)
 	statusY := maxY - 2
 	if ui.showSearch {
 		statusY = maxY - 1
+	}
+	if ui.toastMessage != "" {
+		statusY -= 3
 	}
 	if v, err := g.SetView("status", 0, statusY, maxX-1, maxY); err != nil {
 		if err != gocui.ErrUnknownView {
@@ -454,8 +485,10 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 		}
 		if fetchedIssues, err := ui.client.GetIssues(context.Background(), teamID); err == nil {
 			ui.allIssues = fetchedIssues
+			ui.showToast("Issues reloaded successfully")
 		} else {
 			ui.allIssues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", err)}}
+			ui.showToast(fmt.Sprintf("Failed to reload issues: %v", err))
 		}
 	}
 	ui.issues = ui.filterIssues()
@@ -646,7 +679,26 @@ func (ui *UI) copyToClipboard(text string) error {
 		return err
 	}
 
-	return cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+
+	ui.showToast("Copied to clipboard")
+	return nil
+}
+
+// showToast displays a temporary toast message
+func (ui *UI) showToast(message string) {
+	ui.toastMessage = message
+	if ui.toastTimer != nil {
+		ui.toastTimer.Stop()
+	}
+	ui.toastTimer = time.AfterFunc(3*time.Second, func() {
+		ui.toastMessage = ""
+		ui.gui.Update(func(g *gocui.Gui) error {
+			return nil
+		})
+	})
 }
 
 func (ui *UI) filterIssues() []api.Issue {
