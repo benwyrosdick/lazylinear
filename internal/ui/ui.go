@@ -30,20 +30,23 @@ type UI struct {
 	commentContent string
 }
 
-// commentEditor is a custom editor that handles Esc and Enter keys
+// commentEditor is a custom editor that handles Esc key
 type commentEditor struct {
 	ui *UI
 }
 
 func (e *commentEditor) Edit(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) {
+	// Handle Esc key to cancel
 	if key == gocui.KeyEsc {
 		e.ui.cancelComment(e.ui.gui, v)
 		return
 	}
-	if key == gocui.KeyEnter {
-		gocui.DefaultEditor.Edit(v, key, ch, mod)
+	// Handle Ctrl+S to submit
+	if key == gocui.KeyCtrlS {
+		e.ui.submitComment(e.ui.gui, v)
 		return
 	}
+	// Pass all other keys to default editor
 	gocui.DefaultEditor.Edit(v, key, ch, mod)
 }
 
@@ -53,6 +56,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Enable InputEsc mode to handle Esc key properly
+	g.InputEsc = true
 
 	// Enable highlighting and set border colors like lazygit
 	g.Highlight = true
