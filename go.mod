@@ -1,4 +1,4 @@
-module lazylinear
+module github.com/benwyrosdick/lazylinear
 
 go 1.25.1
 
