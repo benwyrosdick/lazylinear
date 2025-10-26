@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 
-	"lazylinear/internal/api"
-	"lazylinear/internal/config"
-	"lazylinear/internal/ui"
+	"github.com/benwyrosdick/lazylinear/internal/api"
+	"github.com/benwyrosdick/lazylinear/internal/config"
+	"github.com/benwyrosdick/lazylinear/internal/ui"
 )
 
 func main() {

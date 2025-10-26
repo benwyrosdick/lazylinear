@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benwyrosdick/lazylinear/internal/api"
 	"github.com/jroimartin/gocui"
-	"lazylinear/internal/api"
 )
 
 // UI manages the terminal user interface

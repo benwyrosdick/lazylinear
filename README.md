@@ -12,18 +12,28 @@ A terminal UI for managing Linear issues, inspired by lazygit.
   - Linux: `xclip`, `xsel`, or `wl-copy` (Wayland)
   - macOS: `pbcopy` (pre-installed)
 
+### Install via Go
+
+The easiest way to install:
+
+```bash
+go install github.com/benwyrosdick/lazylinear@latest
+```
+
+Make sure `$GOPATH/bin` (or `$HOME/go/bin`) is in your PATH.
+
 ### Building from Source
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/benwyrosdick/lazylinear.git
 cd lazylinear
 go build -o lazylinear
 ```
 
-Optionally, install directly from GitHub:
+Optionally, move the binary to your PATH:
 
 ```bash
-go install github.com/benwyrosdick/lazylinear@latest
+sudo mv lazylinear /usr/local/bin/
 ```
 
 ## Configuration
