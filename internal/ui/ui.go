@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"sort"
 	"strings"
 	"time"
 
@@ -101,12 +100,7 @@ func NewUI(client *api.Client) (*UI, error) {
 
 	var availableStatuses []string
 	if len(teams) > 0 {
-		states := make([]api.WorkflowState, len(teams[0].States))
-		copy(states, teams[0].States)
-		sort.Slice(states, func(i, j int) bool {
-			return states[i].Position < states[j].Position
-		})
-		for _, state := range states {
+		for _, state := range teams[0].States {
 			availableStatuses = append(availableStatuses, state.Name)
 		}
 	}
@@ -802,12 +796,7 @@ func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.availableStatuses = nil
 	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
-		states := make([]api.WorkflowState, len(ui.teams[ui.currentTeam].States))
-		copy(states, ui.teams[ui.currentTeam].States)
-		sort.Slice(states, func(i, j int) bool {
-			return states[i].Position < states[j].Position
-		})
-		for _, state := range states {
+		for _, state := range ui.teams[ui.currentTeam].States {
 			ui.availableStatuses = append(ui.availableStatuses, state.Name)
 		}
 	}
@@ -824,12 +813,7 @@ func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.availableStatuses = nil
 	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
-		states := make([]api.WorkflowState, len(ui.teams[ui.currentTeam].States))
-		copy(states, ui.teams[ui.currentTeam].States)
-		sort.Slice(states, func(i, j int) bool {
-			return states[i].Position < states[j].Position
-		})
-		for _, state := range states {
+		for _, state := range ui.teams[ui.currentTeam].States {
 			ui.availableStatuses = append(ui.availableStatuses, state.Name)
 		}
 	}

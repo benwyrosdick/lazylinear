@@ -75,6 +75,7 @@ type WorkflowState struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
 	Position float64 `json:"position"`
+	Type     string  `json:"type"`
 }
 
 // GetViewer fetches the current user
@@ -113,13 +114,14 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 					id
 					name
 					key
-					states {
-						nodes {
-							id
-							name
-							position
-						}
+				states {
+					nodes {
+						id
+						name
+						position
+						type
 					}
+				}
 				}
 			}
 		}
@@ -148,11 +150,33 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 
 	teams := make([]Team, len(resp.Teams.Nodes))
 	for i, node := range resp.Teams.Nodes {
+		states := node.States.Nodes
+
+		typeOrder := map[string]int{
+			"triage":    0,
+			"backlog":   1,
+			"unstarted": 2,
+			"started":   3,
+			"completed": 4,
+			"canceled":  5,
+		}
+
+		sort.SliceStable(states, func(i, j int) bool {
+			typeI := typeOrder[states[i].Type]
+			typeJ := typeOrder[states[j].Type]
+
+			if typeI != typeJ {
+				return typeI < typeJ
+			}
+
+			return states[i].Position < states[j].Position
+		})
+
 		teams[i] = Team{
 			ID:     node.ID,
 			Name:   node.Name,
 			Key:    node.Key,
-			States: node.States.Nodes,
+			States: states,
 		}
 	}
 
