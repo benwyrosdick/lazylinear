@@ -137,7 +137,7 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", 'r', gocui.ModNone, ui.refreshIssues); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("issues", 'h', gocui.ModNone, ui.toggleHelp); err != nil {
+	if err := g.SetKeybinding("issues", '?', gocui.ModNone, ui.toggleHelp); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", 'a', gocui.ModNone, ui.toggleAssigned); err != nil {
@@ -185,6 +185,12 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("comment", gocui.KeyEsc, gocui.ModNone, ui.cancelComment); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("help", '?', gocui.ModNone, ui.toggleHelp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("help", gocui.KeyEsc, gocui.ModNone, ui.toggleHelp); err != nil {
+		return nil, err
+	}
 
 	return ui, nil
 }
@@ -225,6 +231,52 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprint(tv, "All")
 		}
 		tv.Title = "Teams ({/} to switch)"
+	}
+
+	// Help modal (if enabled)
+	if ui.showHelp {
+		helpWidth := maxX - 20
+		helpHeight := 20
+		helpX := (maxX - helpWidth) / 2
+		helpY := (maxY - helpHeight) / 2
+
+		if hv, err := g.SetView("help", helpX, helpY, helpX+helpWidth, helpY+helpHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			hv.Title = "LazyLinear Help (Press ? or Esc to close)"
+			hv.Wrap = true
+			g.SetCurrentView("help")
+		} else {
+			hv.Title = "LazyLinear Help (Press ? or Esc to close)"
+			g.SetCurrentView("help")
+		}
+
+		if hv, err := g.View("help"); err == nil {
+			hv.Clear()
+			fmt.Fprintln(hv, "")
+			fmt.Fprintln(hv, "Navigation:")
+			fmt.Fprintln(hv, "  j / ↓   : Move down")
+			fmt.Fprintln(hv, "  k / ↑   : Move up")
+			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
+			fmt.Fprintln(hv, "  { / }   : Switch team")
+			fmt.Fprintln(hv, "")
+			fmt.Fprintln(hv, "Actions:")
+			fmt.Fprintln(hv, "  Enter   : Select issue to view details")
+			fmt.Fprintln(hv, "  r       : Refresh issues")
+			fmt.Fprintln(hv, "  a       : Toggle filter by assigned to me")
+			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
+			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
+			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
+			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
+			fmt.Fprintln(hv, "  ?       : Toggle this help")
+			fmt.Fprintln(hv, "  Ctrl+C  : Quit")
+			fmt.Fprintln(hv, "")
+			fmt.Fprintln(hv, "Configuration:")
+			fmt.Fprintln(hv, "  Set your Linear API key in ~/.lazylinear/config.json")
+		}
+	} else {
+		g.DeleteView("help")
 	}
 
 	// Comment pane (if enabled)
@@ -325,8 +377,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	}
 
-	// Set focus to issues view (unless search or comment is active)
-	if !ui.showSearch && !ui.showComment {
+	// Set focus to issues view (unless search, comment, or help is active)
+	if !ui.showSearch && !ui.showComment && !ui.showHelp {
 		g.SetCurrentView("issues")
 	}
 
@@ -341,30 +393,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 	// Update details content
 	dv.Clear()
-	if ui.showHelp {
-		fmt.Fprintln(dv, "LazyLinear Help")
-		fmt.Fprintln(dv, "===============")
-		fmt.Fprintln(dv, "")
-		fmt.Fprintln(dv, "Navigation:")
-		fmt.Fprintln(dv, "  j / ↓   : Move down")
-		fmt.Fprintln(dv, "  k / ↑   : Move up")
-		fmt.Fprintln(dv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
-		fmt.Fprintln(dv, "  { / }   : Switch team")
-		fmt.Fprintln(dv, "")
-		fmt.Fprintln(dv, "Actions:")
-		fmt.Fprintln(dv, "  Enter   : Select issue to view details")
-		fmt.Fprintln(dv, "  r       : Refresh issues")
-		fmt.Fprintln(dv, "  a       : Toggle filter by assigned to me")
-		fmt.Fprintln(dv, "  /       : Search issues (Enter to apply, Ctrl+Q to cancel)")
-		fmt.Fprintln(dv, "  c       : Add comment to selected issue")
-		fmt.Fprintln(dv, "  ,       : Copy issue URL to clipboard")
-		fmt.Fprintln(dv, "  .       : Copy git branch name to clipboard")
-		fmt.Fprintln(dv, "  h       : Toggle this help")
-		fmt.Fprintln(dv, "  Ctrl+C  : Quit")
-		fmt.Fprintln(dv, "")
-		fmt.Fprintln(dv, "Configuration:")
-		fmt.Fprintln(dv, "  Set your Linear API key in ~/.lazylinear/config.json")
-	} else if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
 		fmt.Fprintf(dv, "ID: %s\n", issue.ID)
 		fmt.Fprintf(dv, "Title: %s\n", issue.Title)
@@ -381,7 +410,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	} else {
 		fmt.Fprintln(dv, "Select an issue to view details")
-		fmt.Fprintln(dv, "Press 'h' for help")
+		fmt.Fprintln(dv, "Press '?' for help")
 	}
 
 	// Toast message (if present)
@@ -423,7 +452,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 	if sv, err := g.View("status"); err == nil {
 		sv.Clear()
-		status := "j/k/↑/↓: navigate | [/]: switch view | Enter: select | r: refresh | /: search | a: my issues | h: help | Ctrl+C: quit"
+		status := "j/k/↑/↓: navigate | [/]: switch view | Enter: select | r: refresh | /: search | a: my issues | ?: help | Ctrl+C: quit"
 		if ui.assignedToMe {
 			status = "[My Issues] " + status
 		}
@@ -506,6 +535,9 @@ func (ui *UI) selectIssue(g *gocui.Gui, v *gocui.View) error {
 
 func (ui *UI) toggleHelp(g *gocui.Gui, v *gocui.View) error {
 	ui.showHelp = !ui.showHelp
+	if !ui.showHelp {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
