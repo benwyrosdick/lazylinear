@@ -376,7 +376,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 
 		identifierFmt := fmt.Sprintf("%%-%ds", maxIdentifierLen+1)
-		fmt.Fprintf(v, "\033[32m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n", issue.Identifier, colorCode, stateIcon, initials, issue.Title)
+		fmt.Fprintf(v, "\033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n", issue.Identifier, colorCode, stateIcon, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
@@ -412,17 +412,30 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	dv.Clear()
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
-		fmt.Fprintf(dv, "ID: %s\n", issue.ID)
-		fmt.Fprintf(dv, "Title: %s\n", issue.Title)
-		fmt.Fprintf(dv, "State: %s\n", issue.State.Name)
-		if issue.Assignee.Name != "" {
-			fmt.Fprintf(dv, "Assignee: %s\n", issue.Assignee.Name)
+
+		stateColorCode := "37"
+		if issue.State.Color != "" {
+			if strings.HasPrefix(issue.State.Color, "#") {
+				stateColorCode = ui.hexToAnsi(issue.State.Color)
+			}
 		}
-		fmt.Fprintf(dv, "\nDescription:\n%s\n", issue.Description)
+
+		fmt.Fprintf(dv, "\033[36m%s\033[0m\n", issue.Identifier)
+		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
+		fmt.Fprintf(dv, "\033[90mState:\033[0m \033[%sm%s\033[0m\n", stateColorCode, issue.State.Name)
+		if issue.Assignee.Name != "" {
+			fmt.Fprintf(dv, "\033[90mAssignee:\033[0m %s\n", issue.Assignee.Name)
+		}
+		if issue.URL != "" {
+			fmt.Fprintf(dv, "\033[90mURL:\033[0m \033[34m%s\033[0m\n", issue.URL)
+		}
+		if issue.Description != "" {
+			fmt.Fprintf(dv, "\n\033[90mDescription:\033[0m\n%s\n", issue.Description)
+		}
 		if len(issue.Comments.Nodes) > 0 {
-			fmt.Fprintln(dv, "\nComments:")
+			fmt.Fprintf(dv, "\n\033[90mComments:\033[0m\n")
 			for _, comment := range issue.Comments.Nodes {
-				fmt.Fprintf(dv, "- %s (%s): %s\n", comment.User.Name, comment.CreatedAt, comment.Body)
+				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[90m(%s)\033[0m\n%s\n\n", comment.User.Name, comment.CreatedAt, comment.Body)
 			}
 		}
 	} else {
