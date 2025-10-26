@@ -494,3 +494,41 @@ func (c *Client) UpdateIssueAssignee(ctx context.Context, issueID string, assign
 
 	return nil
 }
+
+func (c *Client) UpdateIssue(ctx context.Context, issueID string, title string, description string) error {
+	req := graphql.NewRequest(`
+		mutation($issueId: String!, $title: String, $description: String) {
+			issueUpdate(id: $issueId, input: {
+				title: $title
+				description: $description
+			}) {
+				success
+				issue {
+					id
+					title
+					description
+				}
+			}
+		}
+	`)
+
+	req.Var("issueId", issueID)
+	req.Var("title", title)
+	req.Var("description", description)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		IssueUpdate struct {
+			Success bool `json:"success"`
+		} `json:"issueUpdate"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return err
+	}
+
+	return nil
+}
