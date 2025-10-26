@@ -438,18 +438,18 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 		fmt.Fprintf(dv, "\033[36m%s\033[0m\n", issue.Identifier)
 		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
-		fmt.Fprintf(dv, "\033[90mState:\033[0m \033[%sm%s\033[0m\n", stateColorCode, issue.State.Name)
+		fmt.Fprintf(dv, "\033[35mState:\033[0m \033[%sm%s\033[0m\n", stateColorCode, issue.State.Name)
 		if issue.Assignee.Name != "" {
-			fmt.Fprintf(dv, "\033[90mAssignee:\033[0m %s\n", issue.Assignee.Name)
+			fmt.Fprintf(dv, "\033[35mAssignee:\033[0m %s\n", issue.Assignee.Name)
 		}
 		if issue.URL != "" {
-			fmt.Fprintf(dv, "\033[90mURL:\033[0m \033[34m%s\033[0m\n", issue.URL)
+			fmt.Fprintf(dv, "\033[35mURL:\033[0m \033[34m%s\033[0m\n", issue.URL)
 		}
 		if issue.Description != "" {
-			fmt.Fprintf(dv, "\n\033[90mDescription:\033[0m\n%s\n", issue.Description)
+			fmt.Fprintf(dv, "\n\033[31mDescription:\033[0m\n%s\n", issue.Description)
 		}
 		if len(issue.Comments.Nodes) > 0 {
-			fmt.Fprintf(dv, "\n\033[90mComments:\033[0m\n")
+			fmt.Fprintf(dv, "\n\033[31mComments:\033[0m\n")
 			for _, comment := range issue.Comments.Nodes {
 				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[90m(%s)\033[0m\n%s\n\n", comment.User.Name, comment.CreatedAt, comment.Body)
 			}
