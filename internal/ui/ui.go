@@ -324,7 +324,50 @@ func (ui *UI) layout(g *gocui.Gui) error {
 				}
 			}
 		}
-		fmt.Fprintf(v, "\033[32m%s\033[0m \033[33m%s\033[0m %s\n", issue.Identifier, initials, issue.Title)
+
+		stateIcon := "○"
+		switch issue.State.Type {
+		case "triage":
+			stateIcon = "↔"
+		case "backlog":
+			stateIcon = "◌"
+		case "unstarted":
+			stateIcon = "○"
+		case "started":
+			stateIcon = "◕"
+		case "completed":
+			stateIcon = "✓"
+		case "canceled":
+			stateIcon = "x"
+		}
+
+		colorCode := "37"
+		if issue.State.Color != "" {
+			if strings.HasPrefix(issue.State.Color, "#") {
+				colorCode = ui.hexToAnsi(issue.State.Color)
+			} else {
+				switch issue.State.Color {
+				case "red":
+					colorCode = "31"
+				case "green":
+					colorCode = "32"
+				case "yellow":
+					colorCode = "33"
+				case "blue":
+					colorCode = "34"
+				case "magenta":
+					colorCode = "35"
+				case "cyan":
+					colorCode = "36"
+				case "white":
+					colorCode = "37"
+				case "gray", "grey":
+					colorCode = "90"
+				}
+			}
+		}
+
+		fmt.Fprintf(v, "\033[32m%s\033[0m \033[%sm%s\033[0m \033[33m%s\033[0m %s\n", issue.Identifier, colorCode, stateIcon, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
@@ -889,6 +932,46 @@ func (ui *UI) showToast(message string) {
 			return nil
 		})
 	})
+}
+
+func (ui *UI) hexToAnsi(hex string) string {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return "37"
+	}
+
+	var r, g, b int
+	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+
+	brightness := (r + g + b) / 3
+
+	if r > 150 && g > 150 && b < 120 {
+		return "33"
+	}
+
+	if r > 150 && g < 120 && b < 120 {
+		return "31"
+	}
+
+	if brightness < 64 {
+		return "90"
+	} else if brightness > 200 {
+		return "37"
+	}
+
+	if r > g && r > b {
+		return "31"
+	} else if g > r && g > b {
+		return "32"
+	} else if b > r && b > g {
+		return "34"
+	} else if r > 150 && b > 150 {
+		return "35"
+	} else if g > 150 && b > 150 {
+		return "36"
+	}
+
+	return "37"
 }
 
 func (ui *UI) filterIssues() []api.Issue {

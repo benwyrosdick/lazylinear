@@ -33,7 +33,9 @@ type Issue struct {
 	URL         string `json:"url"`
 	BranchName  string `json:"branchName"`
 	State       struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Type  string `json:"type"`
+		Color string `json:"color"`
 	} `json:"state"`
 	Team struct {
 		ID string `json:"id"`
@@ -76,6 +78,7 @@ type WorkflowState struct {
 	Name     string  `json:"name"`
 	Position float64 `json:"position"`
 	Type     string  `json:"type"`
+	Color    string  `json:"color"`
 }
 
 // GetViewer fetches the current user
@@ -120,6 +123,7 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 						name
 						position
 						type
+						color
 					}
 				}
 				}
@@ -206,6 +210,8 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 					branchName
 					state {
 						name
+						type
+						color
 					}
 					team {
 						id
@@ -246,6 +252,8 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 					branchName
 					state {
 						name
+						type
+						color
 					}
 					team {
 						id
