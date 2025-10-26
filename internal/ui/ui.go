@@ -972,12 +972,15 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			tv.Title = "Title"
+			tv.Title = "Title (Tab: switch, Ctrl+S: save, Esc: cancel)"
 			tv.Editable = true
 			tv.Editor = gocui.DefaultEditor
 			tv.Frame = true
 			fmt.Fprint(tv, ui.editTitle)
 			tv.SetCursor(len(ui.editTitle), 0)
+			if ui.editActivePane == "title" {
+				g.SetCurrentView("edit_title")
+			}
 		} else {
 			if ui.editActivePane == "title" {
 				tv.Title = "Title (Tab: switch, Ctrl+S: save, Esc: cancel)"
@@ -992,12 +995,15 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			dv.Title = "Description"
+			dv.Title = "Description (Tab: switch, Ctrl+S: save, Esc: cancel)"
 			dv.Editable = true
 			dv.Editor = gocui.DefaultEditor
 			dv.Wrap = true
 			dv.Frame = true
 			fmt.Fprint(dv, ui.editDescription)
+			if ui.editActivePane == "description" {
+				g.SetCurrentView("edit_description")
+			}
 		} else {
 			if ui.editActivePane == "description" {
 				dv.Title = "Description (Tab: switch, Ctrl+S: save, Esc: cancel)"
@@ -1025,12 +1031,15 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			tv.Title = "Title"
+			tv.Title = "Title (Tab: switch, Ctrl+S: create, Esc: cancel)"
 			tv.Editable = true
 			tv.Editor = gocui.DefaultEditor
 			tv.Frame = true
 			fmt.Fprint(tv, ui.createTitle)
 			tv.SetCursor(len(ui.createTitle), 0)
+			if ui.createActivePane == "title" {
+				g.SetCurrentView("create_title")
+			}
 		} else {
 			if ui.createActivePane == "title" {
 				tv.Title = "Title (Tab: switch, Ctrl+S: create, Esc: cancel)"
@@ -1045,12 +1054,15 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			dv.Title = "Description"
+			dv.Title = "Description (Tab: switch, Ctrl+S: create, Esc: cancel)"
 			dv.Editable = true
 			dv.Editor = gocui.DefaultEditor
 			dv.Wrap = true
 			dv.Frame = true
 			fmt.Fprint(dv, ui.createDescription)
+			if ui.createActivePane == "description" {
+				g.SetCurrentView("create_description")
+			}
 		} else {
 			if ui.createActivePane == "description" {
 				dv.Title = "Description (Tab: switch, Ctrl+S: create, Esc: cancel)"
