@@ -46,10 +46,14 @@ type UI struct {
 		id   string
 		name string
 	}
-	showEdit        bool
-	editTitle       string
-	editDescription string
-	editActivePane  string
+	showEdit          bool
+	editTitle         string
+	editDescription   string
+	editActivePane    string
+	showCreate        bool
+	createTitle       string
+	createDescription string
+	createActivePane  string
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -164,8 +168,10 @@ func NewUI(client *api.Client) (*UI, error) {
 			id   string
 			name string
 		}{},
-		showEdit:       false,
-		editActivePane: "title",
+		showEdit:         false,
+		editActivePane:   "title",
+		showCreate:       false,
+		createActivePane: "title",
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -223,6 +229,9 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", 'c', gocui.ModNone, ui.toggleComment); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", 'n', gocui.ModNone, ui.toggleCreate); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", 'e', gocui.ModNone, ui.toggleEdit); err != nil {
@@ -328,6 +337,30 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("edit_description", gocui.MouseLeft, gocui.ModNone, ui.clickEditDescription); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_title", gocui.KeyTab, gocui.ModNone, ui.switchCreatePane); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_title", gocui.KeyCtrlS, gocui.ModNone, ui.submitCreate); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_title", gocui.KeyEsc, gocui.ModNone, ui.cancelCreate); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_description", gocui.KeyTab, gocui.ModNone, ui.switchCreatePane); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_description", gocui.KeyCtrlS, gocui.ModNone, ui.submitCreate); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_description", gocui.KeyEsc, gocui.ModNone, ui.cancelCreate); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_title", gocui.MouseLeft, gocui.ModNone, ui.clickCreateTitle); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("create_description", gocui.MouseLeft, gocui.ModNone, ui.clickCreateDescription); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", gocui.MouseLeft, gocui.ModNone, ui.clickIssues); err != nil {
@@ -511,7 +544,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 
 	// Set cursor to first item if needed
-	if len(ui.issues) > 0 && !ui.showEdit && !ui.showComment && !ui.showStatus && !ui.showPriority && !ui.showAssignee {
+	if len(ui.issues) > 0 && !ui.showEdit && !ui.showCreate && !ui.showComment && !ui.showStatus && !ui.showPriority && !ui.showAssignee {
 		_, cy := v.Cursor()
 		if cy >= len(ui.issues) {
 			v.SetCursor(0, len(ui.issues)-1)
@@ -536,6 +569,13 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			g.SetCurrentView("edit_title")
 		} else {
 			g.SetCurrentView("edit_description")
+		}
+		g.Cursor = true
+	} else if ui.showCreate {
+		if ui.createActivePane == "title" {
+			g.SetCurrentView("create_title")
+		} else {
+			g.SetCurrentView("create_description")
 		}
 		g.Cursor = true
 	} else if ui.showHelp {
@@ -708,6 +748,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  r       : Refresh issues")
 			fmt.Fprintln(hv, "  m       : Toggle filter by assigned to me")
 			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
+			fmt.Fprintln(hv, "  n       : Create new issue")
 			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
 			fmt.Fprintln(hv, "  e       : Edit issue title and description")
 			fmt.Fprintln(hv, "  s       : Change status of selected issue")
@@ -969,6 +1010,59 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.DeleteView("edit_description")
 	}
 
+	// Create pane (if enabled)
+	if ui.showCreate {
+		createWidth := maxX - 10
+		titleHeight := 3
+		descriptionHeight := 15
+		totalHeight := titleHeight + descriptionHeight + 3
+		createX := (maxX - createWidth) / 2
+		createY := (maxY - totalHeight) / 2
+
+		// Title pane
+		titleY := createY
+		if tv, err := g.SetView("create_title", createX, titleY, createX+createWidth, titleY+titleHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			tv.Title = "Title"
+			tv.Editable = true
+			tv.Editor = gocui.DefaultEditor
+			tv.Frame = true
+			fmt.Fprint(tv, ui.createTitle)
+			tv.SetCursor(len(ui.createTitle), 0)
+		} else {
+			if ui.createActivePane == "title" {
+				tv.Title = "Title (Tab: switch, Ctrl+S: create, Esc: cancel)"
+			} else {
+				tv.Title = "Title"
+			}
+		}
+
+		// Description pane
+		descriptionY := titleY + titleHeight + 1
+		if dv, err := g.SetView("create_description", createX, descriptionY, createX+createWidth, descriptionY+descriptionHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			dv.Title = "Description"
+			dv.Editable = true
+			dv.Editor = gocui.DefaultEditor
+			dv.Wrap = true
+			dv.Frame = true
+			fmt.Fprint(dv, ui.createDescription)
+		} else {
+			if ui.createActivePane == "description" {
+				dv.Title = "Description (Tab: switch, Ctrl+S: create, Esc: cancel)"
+			} else {
+				dv.Title = "Description"
+			}
+		}
+	} else {
+		g.DeleteView("create_title")
+		g.DeleteView("create_description")
+	}
+
 	return nil
 }
 
@@ -977,7 +1071,7 @@ func (ui *UI) quit(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
 		return nil
 	}
 	if v != nil && len(ui.issues) > 0 {
@@ -1000,7 +1094,7 @@ func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
 		return nil
 	}
 	if v != nil && len(ui.issues) > 0 {
@@ -1023,7 +1117,7 @@ func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	if ui.client != nil {
@@ -1045,7 +1139,7 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) selectIssue(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
 		return nil
 	}
 	_, cy := v.Cursor()
@@ -1064,7 +1158,7 @@ func (ui *UI) toggleHelp(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) toggleAssigned(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	ui.assignedToMe = !ui.assignedToMe
@@ -1270,7 +1364,7 @@ func (ui *UI) cancelPriority(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) prevView(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	ui.currentView--
@@ -1283,7 +1377,7 @@ func (ui *UI) prevView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) nextView(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	ui.currentView++
@@ -1296,7 +1390,7 @@ func (ui *UI) nextView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	if len(ui.teams) == 0 {
@@ -1316,7 +1410,7 @@ func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	if len(ui.teams) == 0 {
@@ -1656,13 +1750,111 @@ func (ui *UI) clickEditDescription(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) clickIssues(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
 	if v != nil {
 		_, cy := v.Cursor()
 		if cy >= 0 && cy < len(ui.issues) {
 			ui.selectedIssue = cy
+		}
+	}
+	return nil
+}
+
+func (ui *UI) toggleCreate(g *gocui.Gui, v *gocui.View) error {
+	ui.createTitle = ""
+	ui.createDescription = ""
+	ui.createActivePane = "title"
+	ui.showCreate = true
+	return nil
+}
+
+func (ui *UI) switchCreatePane(g *gocui.Gui, v *gocui.View) error {
+	if ui.createActivePane == "title" {
+		ui.createActivePane = "description"
+		g.SetCurrentView("create_description")
+	} else {
+		ui.createActivePane = "title"
+		g.SetCurrentView("create_title")
+	}
+	return nil
+}
+
+func (ui *UI) submitCreate(g *gocui.Gui, v *gocui.View) error {
+	titleView, err := g.View("create_title")
+	if err != nil {
+		return err
+	}
+	descriptionView, err := g.View("create_description")
+	if err != nil {
+		return err
+	}
+
+	newTitle := strings.TrimSpace(titleView.Buffer())
+	newDescription := strings.TrimSpace(descriptionView.Buffer())
+
+	if newTitle == "" {
+		ui.showToast("Title cannot be empty")
+		return nil
+	}
+
+	if ui.client != nil && len(ui.teams) > 0 {
+		teamID := ""
+		if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+			teamID = ui.teams[ui.currentTeam].ID
+		}
+		if teamID == "" && len(ui.teams) > 0 {
+			teamID = ui.teams[0].ID
+		}
+
+		newIssue, err := ui.client.CreateIssue(context.Background(), teamID, newTitle, newDescription)
+		if err != nil {
+			ui.showToast(fmt.Sprintf("Failed to create issue: %v", err))
+		} else {
+			ui.showToast(fmt.Sprintf("Created %s", newIssue.Identifier))
+			ui.refreshIssues(g, v)
+		}
+	}
+
+	ui.showCreate = false
+	ui.createActivePane = "title"
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) cancelCreate(g *gocui.Gui, v *gocui.View) error {
+	ui.showCreate = false
+	ui.createActivePane = "title"
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) clickCreateTitle(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		ui.createActivePane = "title"
+		g.SetCurrentView("create_title")
+
+		content := strings.TrimRight(v.Buffer(), "\n")
+		lineLen := len(content)
+		if lineLen > 0 {
+			v.SetCursor(lineLen, 0)
+		}
+	}
+	return nil
+}
+
+func (ui *UI) clickCreateDescription(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		ui.createActivePane = "description"
+		g.SetCurrentView("create_description")
+
+		content := strings.TrimRight(v.Buffer(), "\n")
+		lines := strings.Split(content, "\n")
+		if len(lines) > 0 {
+			lastLine := len(lines) - 1
+			lastLineLen := len(lines[lastLine])
+			v.SetCursor(lastLineLen, lastLine)
 		}
 	}
 	return nil

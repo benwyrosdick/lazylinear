@@ -532,3 +532,59 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, title string, 
 
 	return nil
 }
+
+func (c *Client) CreateIssue(ctx context.Context, teamID string, title string, description string) (*Issue, error) {
+	req := graphql.NewRequest(`
+		mutation($teamId: String!, $title: String!, $description: String) {
+			issueCreate(input: {
+				teamId: $teamId
+				title: $title
+				description: $description
+			}) {
+				success
+				issue {
+					id
+					identifier
+					title
+					description
+					url
+					branchName
+					priority
+					state {
+						name
+						type
+						color
+					}
+					team {
+						id
+					}
+					assignee {
+						id
+						name
+					}
+				}
+			}
+		}
+	`)
+
+	req.Var("teamId", teamID)
+	req.Var("title", title)
+	req.Var("description", description)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		IssueCreate struct {
+			Success bool  `json:"success"`
+			Issue   Issue `json:"issue"`
+		} `json:"issueCreate"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp.IssueCreate.Issue, nil
+}
