@@ -13,24 +13,27 @@ import (
 
 // UI manages the terminal user interface
 type UI struct {
-	gui            *gocui.Gui
-	client         *api.Client
-	issues         []api.Issue
-	allIssues      []api.Issue
-	selectedIssue  int
-	showHelp       bool
-	showSearch     bool
-	searchString   string
-	assignedToMe   bool
-	viewerID       string
-	currentView    int
-	views          []string
-	teams          []api.Team
-	currentTeam    int
-	showComment    bool
-	commentContent string
-	toastMessage   string
-	toastTimer     *time.Timer
+	gui               *gocui.Gui
+	client            *api.Client
+	issues            []api.Issue
+	allIssues         []api.Issue
+	selectedIssue     int
+	showHelp          bool
+	showSearch        bool
+	searchString      string
+	assignedToMe      bool
+	viewerID          string
+	currentView       int
+	views             []string
+	teams             []api.Team
+	currentTeam       int
+	showComment       bool
+	commentContent    string
+	toastMessage      string
+	toastTimer        *time.Timer
+	showStatus        bool
+	selectedStatus    int
+	availableStatuses []string
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -96,24 +99,27 @@ func NewUI(client *api.Client) (*UI, error) {
 	}
 
 	ui := &UI{
-		gui:            g,
-		client:         client,
-		issues:         issues,
-		allIssues:      issues,
-		selectedIssue:  -1,
-		showHelp:       false,
-		showSearch:     false,
-		searchString:   "",
-		assignedToMe:   false,
-		viewerID:       viewerID,
-		currentView:    0,
-		views:          []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
-		teams:          teams,
-		currentTeam:    0,
-		showComment:    false,
-		commentContent: "",
-		toastMessage:   "",
-		toastTimer:     nil,
+		gui:               g,
+		client:            client,
+		issues:            issues,
+		allIssues:         issues,
+		selectedIssue:     -1,
+		showHelp:          false,
+		showSearch:        false,
+		searchString:      "",
+		assignedToMe:      false,
+		viewerID:          viewerID,
+		currentView:       0,
+		views:             []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
+		teams:             teams,
+		currentTeam:       0,
+		showComment:       false,
+		commentContent:    "",
+		toastMessage:      "",
+		toastTimer:        nil,
+		showStatus:        false,
+		selectedStatus:    0,
+		availableStatuses: []string{"Backlog", "Todo", "Blocked", "In Progress", "In Review", "Staged", "Released", "QA'd", "Archived", "Cancelled", "Duplicate", "Triage"},
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -170,6 +176,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", 'c', gocui.ModNone, ui.toggleComment); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", 's', gocui.ModNone, ui.toggleStatus); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
 		return nil, err
 	}
@@ -189,6 +198,24 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("help", gocui.KeyEsc, gocui.ModNone, ui.toggleHelp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("status", gocui.KeyArrowDown, gocui.ModNone, ui.statusDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("status", gocui.KeyArrowUp, gocui.ModNone, ui.statusUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("status", 'j', gocui.ModNone, ui.statusDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("status", 'k', gocui.ModNone, ui.statusUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("status", gocui.KeyEnter, gocui.ModNone, ui.submitStatus); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("status", gocui.KeyEsc, gocui.ModNone, ui.cancelStatus); err != nil {
 		return nil, err
 	}
 
@@ -231,77 +258,6 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprint(tv, "All")
 		}
 		tv.Title = "Teams ({/} to switch)"
-	}
-
-	// Help modal (if enabled)
-	if ui.showHelp {
-		helpWidth := maxX - 20
-		helpHeight := 20
-		helpX := (maxX - helpWidth) / 2
-		helpY := (maxY - helpHeight) / 2
-
-		if hv, err := g.SetView("help", helpX, helpY, helpX+helpWidth, helpY+helpHeight); err != nil {
-			if err != gocui.ErrUnknownView {
-				return err
-			}
-			hv.Title = "LazyLinear Help (Press ? or Esc to close)"
-			hv.Wrap = true
-			g.SetCurrentView("help")
-		} else {
-			hv.Title = "LazyLinear Help (Press ? or Esc to close)"
-			g.SetCurrentView("help")
-		}
-
-		if hv, err := g.View("help"); err == nil {
-			hv.Clear()
-			fmt.Fprintln(hv, "")
-			fmt.Fprintln(hv, "Navigation:")
-			fmt.Fprintln(hv, "  j / ↓   : Move down")
-			fmt.Fprintln(hv, "  k / ↑   : Move up")
-			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
-			fmt.Fprintln(hv, "  { / }   : Switch team")
-			fmt.Fprintln(hv, "")
-			fmt.Fprintln(hv, "Actions:")
-			fmt.Fprintln(hv, "  Enter   : Select issue to view details")
-			fmt.Fprintln(hv, "  r       : Refresh issues")
-			fmt.Fprintln(hv, "  a       : Toggle filter by assigned to me")
-			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
-			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
-			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
-			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
-			fmt.Fprintln(hv, "  ?       : Toggle this help")
-			fmt.Fprintln(hv, "  Ctrl+C  : Quit")
-			fmt.Fprintln(hv, "")
-			fmt.Fprintln(hv, "Configuration:")
-			fmt.Fprintln(hv, "  Set your Linear API key in ~/.lazylinear/config.json")
-		}
-	} else {
-		g.DeleteView("help")
-	}
-
-	// Comment pane (if enabled)
-	if ui.showComment {
-		commentWidth := maxX - 20
-		commentHeight := 10
-		commentX := (maxX - commentWidth) / 2
-		commentY := (maxY - commentHeight) / 2
-
-		if cv, err := g.SetView("comment", commentX, commentY, commentX+commentWidth, commentY+commentHeight); err != nil {
-			if err != gocui.ErrUnknownView {
-				return err
-			}
-			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
-			cv.Editable = true
-			cv.Editor = &commentEditor{ui: ui}
-			cv.Wrap = true
-			g.SetCurrentView("comment")
-		} else {
-			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
-			g.SetCurrentView("comment")
-		}
-
-	} else {
-		g.DeleteView("comment")
 	}
 
 	// Search bar (if enabled)
@@ -381,8 +337,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	}
 
-	// Set focus to issues view (unless search, comment, or help is active)
-	if !ui.showSearch && !ui.showComment && !ui.showHelp {
+	// Set focus to issues view (unless search, comment, status, or help is active)
+	if !ui.showSearch && !ui.showComment && !ui.showHelp && !ui.showStatus {
 		g.SetCurrentView("issues")
 	}
 
@@ -464,6 +420,114 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			status = fmt.Sprintf("[Search: %s] %s", ui.searchString, status)
 		}
 		fmt.Fprintln(sv, status)
+	}
+
+	// Modals (rendered last so they appear on top)
+	// Help modal (if enabled)
+	if ui.showHelp {
+		helpWidth := maxX - 20
+		helpHeight := 20
+		helpX := (maxX - helpWidth) / 2
+		helpY := (maxY - helpHeight) / 2
+
+		if hv, err := g.SetView("help", helpX, helpY, helpX+helpWidth, helpY+helpHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			hv.Title = "LazyLinear Help (Press ? or Esc to close)"
+			hv.Wrap = true
+			g.SetCurrentView("help")
+		} else {
+			hv.Title = "LazyLinear Help (Press ? or Esc to close)"
+			g.SetCurrentView("help")
+		}
+
+		if hv, err := g.View("help"); err == nil {
+			hv.Clear()
+			fmt.Fprintln(hv, "")
+			fmt.Fprintln(hv, "Navigation:")
+			fmt.Fprintln(hv, "  j / ↓   : Move down")
+			fmt.Fprintln(hv, "  k / ↑   : Move up")
+			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
+			fmt.Fprintln(hv, "  { / }   : Switch team")
+			fmt.Fprintln(hv, "")
+			fmt.Fprintln(hv, "Actions:")
+			fmt.Fprintln(hv, "  Enter   : Select issue to view details")
+			fmt.Fprintln(hv, "  r       : Refresh issues")
+			fmt.Fprintln(hv, "  a       : Toggle filter by assigned to me")
+			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
+			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
+			fmt.Fprintln(hv, "  s       : Change status of selected issue")
+			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
+			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
+			fmt.Fprintln(hv, "  ?       : Toggle this help")
+			fmt.Fprintln(hv, "  Ctrl+C  : Quit")
+			fmt.Fprintln(hv, "")
+			fmt.Fprintln(hv, "Configuration:")
+			fmt.Fprintln(hv, "  Set your Linear API key in ~/.lazylinear/config.json")
+		}
+	} else {
+		g.DeleteView("help")
+	}
+
+	// Status pane (if enabled)
+	if ui.showStatus {
+		statusWidth := 40
+		statusHeight := len(ui.availableStatuses) + 2
+		statusX := (maxX - statusWidth) / 2
+		statusY := (maxY - statusHeight) / 2
+
+		if sv, err := g.SetView("status", statusX, statusY, statusX+statusWidth, statusY+statusHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			sv.Title = "Status (Enter: submit, Esc:cancel)"
+			sv.Frame = true
+			sv.Highlight = true
+			sv.SelBgColor = gocui.ColorBlue
+			sv.SelFgColor = gocui.ColorWhite
+		}
+
+		if sv, err := g.View("status"); err == nil {
+			sv.Clear()
+			sv.Title = "Status (Enter: submit, Esc: cancel)"
+			sv.Frame = true
+			sv.Highlight = true
+			sv.SelBgColor = gocui.ColorBlue
+			sv.SelFgColor = gocui.ColorWhite
+			for _, status := range ui.availableStatuses {
+				fmt.Fprintln(sv, status)
+			}
+			sv.SetCursor(0, ui.selectedStatus)
+			g.SetCurrentView("status")
+		}
+	} else {
+		g.DeleteView("status")
+	}
+
+	// Comment pane (if enabled)
+	if ui.showComment {
+		commentWidth := maxX - 20
+		commentHeight := 10
+		commentX := (maxX - commentWidth) / 2
+		commentY := (maxY - commentHeight) / 2
+
+		if cv, err := g.SetView("comment", commentX, commentY, commentX+commentWidth, commentY+commentHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
+			cv.Editable = true
+			cv.Editor = &commentEditor{ui: ui}
+			cv.Wrap = true
+			g.SetCurrentView("comment")
+		} else {
+			cv.Title = "Add Comment (Ctrl+S to submit, Esc to cancel)"
+			g.SetCurrentView("comment")
+		}
+
+	} else {
+		g.DeleteView("comment")
 	}
 
 	return nil
@@ -623,6 +687,56 @@ func (ui *UI) cancelComment(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.showComment = false
 	ui.commentContent = ""
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) toggleStatus(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		ui.showStatus = true
+		issue := ui.issues[ui.selectedIssue]
+		for i, status := range ui.availableStatuses {
+			if status == issue.State.Name {
+				ui.selectedStatus = i
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (ui *UI) statusDown(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedStatus < len(ui.availableStatuses)-1 {
+		ui.selectedStatus++
+		cx, cy := v.Cursor()
+		v.SetCursor(cx, cy+1)
+	}
+	return nil
+}
+
+func (ui *UI) statusUp(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedStatus > 0 {
+		ui.selectedStatus--
+		cx, cy := v.Cursor()
+		v.SetCursor(cx, cy-1)
+	}
+	return nil
+}
+
+func (ui *UI) submitStatus(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		newStatus := ui.availableStatuses[ui.selectedStatus]
+		issue := ui.issues[ui.selectedIssue]
+		ui.issues[ui.selectedIssue].State.Name = newStatus
+		ui.showToast(fmt.Sprintf("Changed status to %s for %s", newStatus, issue.Identifier))
+	}
+	ui.showStatus = false
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) cancelStatus(g *gocui.Gui, v *gocui.View) error {
+	ui.showStatus = false
 	g.SetCurrentView("issues")
 	return nil
 }
