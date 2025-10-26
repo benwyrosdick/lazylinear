@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -98,6 +99,18 @@ func NewUI(client *api.Client) (*UI, error) {
 		issues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", apiErr)}}
 	}
 
+	var availableStatuses []string
+	if len(teams) > 0 {
+		states := make([]api.WorkflowState, len(teams[0].States))
+		copy(states, teams[0].States)
+		sort.Slice(states, func(i, j int) bool {
+			return states[i].Position < states[j].Position
+		})
+		for _, state := range states {
+			availableStatuses = append(availableStatuses, state.Name)
+		}
+	}
+
 	ui := &UI{
 		gui:               g,
 		client:            client,
@@ -119,7 +132,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		toastTimer:        nil,
 		showStatus:        false,
 		selectedStatus:    0,
-		availableStatuses: []string{"Backlog", "Todo", "Blocked", "In Progress", "In Review", "Staged", "Released", "QA'd", "Archived", "Cancelled", "Duplicate", "Triage"},
+		availableStatuses: availableStatuses,
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -728,8 +741,25 @@ func (ui *UI) submitStatus(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		newStatus := ui.availableStatuses[ui.selectedStatus]
 		issue := ui.issues[ui.selectedIssue]
-		ui.issues[ui.selectedIssue].State.Name = newStatus
-		ui.showToast(fmt.Sprintf("Changed status to %s for %s", newStatus, issue.Identifier))
+		if ui.client != nil {
+			var stateID string
+			if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+				for _, state := range ui.teams[ui.currentTeam].States {
+					if state.Name == newStatus {
+						stateID = state.ID
+						break
+					}
+				}
+			}
+			if stateID != "" {
+				if err := ui.client.UpdateIssueStatus(context.Background(), issue.ID, stateID); err != nil {
+					ui.showToast(fmt.Sprintf("Failed to update status: %v", err))
+				} else {
+					ui.issues[ui.selectedIssue].State.Name = newStatus
+					ui.showToast(fmt.Sprintf("Changed status to %s for %s", newStatus, issue.Identifier))
+				}
+			}
+		}
 	}
 	ui.showStatus = false
 	g.SetCurrentView("issues")
@@ -770,6 +800,17 @@ func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
 	if ui.currentTeam < 0 {
 		ui.currentTeam = len(ui.teams) - 1
 	}
+	ui.availableStatuses = nil
+	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+		states := make([]api.WorkflowState, len(ui.teams[ui.currentTeam].States))
+		copy(states, ui.teams[ui.currentTeam].States)
+		sort.Slice(states, func(i, j int) bool {
+			return states[i].Position < states[j].Position
+		})
+		for _, state := range states {
+			ui.availableStatuses = append(ui.availableStatuses, state.Name)
+		}
+	}
 	return ui.refreshIssues(g, v)
 }
 
@@ -780,6 +821,17 @@ func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
 	ui.currentTeam++
 	if ui.currentTeam >= len(ui.teams) {
 		ui.currentTeam = 0
+	}
+	ui.availableStatuses = nil
+	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+		states := make([]api.WorkflowState, len(ui.teams[ui.currentTeam].States))
+		copy(states, ui.teams[ui.currentTeam].States)
+		sort.Slice(states, func(i, j int) bool {
+			return states[i].Position < states[j].Position
+		})
+		for _, state := range states {
+			ui.availableStatuses = append(ui.availableStatuses, state.Name)
+		}
 	}
 	return ui.refreshIssues(g, v)
 }

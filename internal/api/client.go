@@ -35,6 +35,9 @@ type Issue struct {
 	State       struct {
 		Name string `json:"name"`
 	} `json:"state"`
+	Team struct {
+		ID string `json:"id"`
+	} `json:"team"`
 	Assignee struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -61,9 +64,17 @@ type Viewer struct {
 
 // Team represents a Linear team
 type Team struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Key  string `json:"key"`
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Key    string          `json:"key"`
+	States []WorkflowState `json:"states"`
+}
+
+// WorkflowState represents a workflow state
+type WorkflowState struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Position float64 `json:"position"`
 }
 
 // GetViewer fetches the current user
@@ -102,6 +113,13 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 					id
 					name
 					key
+					states {
+						nodes {
+							id
+							name
+							position
+						}
+					}
 				}
 			}
 		}
@@ -113,7 +131,14 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 
 	var resp struct {
 		Teams struct {
-			Nodes []Team `json:"nodes"`
+			Nodes []struct {
+				ID     string `json:"id"`
+				Name   string `json:"name"`
+				Key    string `json:"key"`
+				States struct {
+					Nodes []WorkflowState `json:"nodes"`
+				} `json:"states"`
+			} `json:"nodes"`
 		} `json:"teams"`
 	}
 
@@ -121,7 +146,17 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 		return nil, err
 	}
 
-	return resp.Teams.Nodes, nil
+	teams := make([]Team, len(resp.Teams.Nodes))
+	for i, node := range resp.Teams.Nodes {
+		teams[i] = Team{
+			ID:     node.ID,
+			Name:   node.Name,
+			Key:    node.Key,
+			States: node.States.Nodes,
+		}
+	}
+
+	return teams, nil
 }
 
 // GetIssues fetches issues from Linear filtered by specified states
@@ -147,6 +182,9 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 					branchName
 					state {
 						name
+					}
+					team {
+						id
 					}
 					assignee {
 						id
@@ -184,6 +222,9 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 					branchName
 					state {
 						name
+					}
+					team {
+						id
 					}
 					assignee {
 						id
@@ -279,6 +320,43 @@ func (c *Client) AddComment(ctx context.Context, issueID string, body string) er
 		CommentCreate struct {
 			Success bool `json:"success"`
 		} `json:"commentCreate"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) UpdateIssueStatus(ctx context.Context, issueID string, stateID string) error {
+	req := graphql.NewRequest(`
+		mutation($issueId: String!, $stateId: String!) {
+			issueUpdate(id: $issueId, input: {
+				stateId: $stateId
+			}) {
+				success
+				issue {
+					id
+					state {
+						name
+					}
+				}
+			}
+		}
+	`)
+
+	req.Var("issueId", issueID)
+	req.Var("stateId", stateID)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		IssueUpdate struct {
+			Success bool `json:"success"`
+		} `json:"issueUpdate"`
 	}
 
 	if err := c.client.Run(ctx, req, &resp); err != nil {
