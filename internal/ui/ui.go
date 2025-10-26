@@ -355,12 +355,12 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		if issue.Assignee.Name != "" {
 			parts := strings.Fields(issue.Assignee.Name)
 			if len(parts) >= 2 {
-				initials = string(parts[0][0]) + string(parts[1][0])
+				initials = strings.ToUpper(string(parts[0][0]) + string(parts[1][0]))
 			} else if len(parts) == 1 {
 				if len(parts[0]) >= 2 {
-					initials = string(parts[0][0]) + string(parts[0][1])
+					initials = strings.ToUpper(string(parts[0][0]) + string(parts[0][1]))
 				} else {
-					initials = parts[0]
+					initials = strings.ToUpper(parts[0])
 				}
 			}
 		}
@@ -372,8 +372,12 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		_, cy := v.Cursor()
 		if cy >= len(ui.issues) {
 			v.SetCursor(0, len(ui.issues)-1)
+			ui.selectedIssue = len(ui.issues) - 1
 		} else if cy < 0 {
 			v.SetCursor(0, 0)
+			ui.selectedIssue = 0
+		} else {
+			ui.selectedIssue = cy
 		}
 	}
 
@@ -483,6 +487,7 @@ func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
 					}
 				}
 			}
+			ui.selectedIssue = cy + 1
 		}
 	}
 	return nil
@@ -497,10 +502,12 @@ func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
 			if err := v.SetCursor(cx, cy-1); err != nil {
 				return err
 			}
+			ui.selectedIssue = cy - 1
 		} else if oy > 0 {
 			if err := v.SetOrigin(ox, oy-1); err != nil {
 				return err
 			}
+			ui.selectedIssue = cy - 1
 		}
 	}
 	return nil
