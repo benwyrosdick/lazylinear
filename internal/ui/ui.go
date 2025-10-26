@@ -13,27 +13,33 @@ import (
 
 // UI manages the terminal user interface
 type UI struct {
-	gui               *gocui.Gui
-	client            *api.Client
-	issues            []api.Issue
-	allIssues         []api.Issue
-	selectedIssue     int
-	showHelp          bool
-	showSearch        bool
-	searchString      string
-	assignedToMe      bool
-	viewerID          string
-	currentView       int
-	views             []string
-	teams             []api.Team
-	currentTeam       int
-	showComment       bool
-	commentContent    string
-	toastMessage      string
-	toastTimer        *time.Timer
-	showStatus        bool
-	selectedStatus    int
-	availableStatuses []string
+	gui                 *gocui.Gui
+	client              *api.Client
+	issues              []api.Issue
+	allIssues           []api.Issue
+	selectedIssue       int
+	showHelp            bool
+	showSearch          bool
+	searchString        string
+	assignedToMe        bool
+	viewerID            string
+	currentView         int
+	views               []string
+	teams               []api.Team
+	currentTeam         int
+	showComment         bool
+	commentContent      string
+	toastMessage        string
+	toastTimer          *time.Timer
+	showStatus          bool
+	selectedStatus      int
+	availableStatuses   []string
+	showPriority        bool
+	selectedPriority    int
+	availablePriorities []struct {
+		label string
+		value int
+	}
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -127,6 +133,18 @@ func NewUI(client *api.Client) (*UI, error) {
 		showStatus:        false,
 		selectedStatus:    0,
 		availableStatuses: availableStatuses,
+		showPriority:      false,
+		selectedPriority:  0,
+		availablePriorities: []struct {
+			label string
+			value int
+		}{
+			{"No Priority", 0},
+			{"Urgent", 1},
+			{"High", 2},
+			{"Medium", 3},
+			{"Low", 4},
+		},
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -186,6 +204,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", 's', gocui.ModNone, ui.toggleStatus); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", 'p', gocui.ModNone, ui.togglePriority); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("search", gocui.KeyEnter, gocui.ModNone, ui.closeSearch); err != nil {
 		return nil, err
 	}
@@ -220,6 +241,24 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("status", gocui.KeyEsc, gocui.ModNone, ui.cancelStatus); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("priority", gocui.KeyArrowDown, gocui.ModNone, ui.priorityDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("priority", gocui.KeyArrowUp, gocui.ModNone, ui.priorityUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("priority", 'j', gocui.ModNone, ui.priorityDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("priority", 'k', gocui.ModNone, ui.priorityUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("priority", gocui.KeyEnter, gocui.ModNone, ui.submitPriority); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("priority", gocui.KeyEsc, gocui.ModNone, ui.cancelPriority); err != nil {
 		return nil, err
 	}
 
@@ -336,6 +375,18 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
+		priorityIcon := "┄"
+		switch int(issue.Priority) {
+		case 1:
+			priorityIcon = "🞷"
+		case 2:
+			priorityIcon = "Ⅲ"
+		case 3:
+			priorityIcon = "Ⅱ"
+		case 4:
+			priorityIcon = "Ⅰ"
+		}
+
 		stateIcon := "○"
 		switch issue.State.Type {
 		case "triage":
@@ -379,7 +430,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 
 		identifierFmt := fmt.Sprintf("%%-%ds", maxIdentifierLen+1)
-		fmt.Fprintf(v, "\033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n", issue.Identifier, colorCode, stateIcon, initials, issue.Title)
+		fmt.Fprintf(v, "%s \033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n",  priorityIcon, issue.Identifier, colorCode, stateIcon, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
@@ -408,6 +459,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.Cursor = false
 	} else if ui.showStatus {
 		g.SetCurrentView("status")
+		g.Cursor = false
+	} else if ui.showPriority {
+		g.SetCurrentView("priority")
 		g.Cursor = false
 	} else {
 		g.SetCurrentView("issues")
@@ -439,6 +493,25 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintf(dv, "\033[36m%s\033[0m\n", issue.Identifier)
 		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
 		fmt.Fprintf(dv, "\033[35mState:\033[0m \033[%sm%s\033[0m\n", stateColorCode, issue.State.Name)
+		if issue.Priority > 0 {
+			priorityIcon := "┄"
+			priorityLabel := "No Priority"
+			switch int(issue.Priority) {
+			case 1:
+				priorityIcon = "🞷"
+				priorityLabel = "Urgent"
+			case 2:
+				priorityIcon = "Ⅲ"
+				priorityLabel = "High"
+			case 3:
+				priorityIcon = "Ⅱ"
+				priorityLabel = "Medium"
+			case 4:
+				priorityIcon = "Ⅰ"
+				priorityLabel = "Low"
+			}
+			fmt.Fprintf(dv, "\033[35mPriority:\033[0m %s %s\n", priorityIcon, priorityLabel)
+		}
 		if issue.Assignee.Name != "" {
 			fmt.Fprintf(dv, "\033[35mAssignee:\033[0m %s\n", issue.Assignee.Name)
 		}
@@ -544,6 +617,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
 			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
 			fmt.Fprintln(hv, "  s       : Change status of selected issue")
+			fmt.Fprintln(hv, "  p       : Change priority of selected issue")
 			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
 			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
 			fmt.Fprintln(hv, "  ?       : Toggle this help")
@@ -620,6 +694,52 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	} else {
 		g.DeleteView("status")
+	}
+
+	// Priority pane (if enabled)
+	if ui.showPriority {
+		priorityWidth := 30
+		priorityHeight := len(ui.availablePriorities) + 2
+		priorityX := (maxX - priorityWidth) / 2
+		priorityY := (maxY - priorityHeight) / 2
+
+		if pv, err := g.SetView("priority", priorityX, priorityY, priorityX+priorityWidth, priorityY+priorityHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			pv.Title = "Priority (Enter: submit, Esc: cancel)"
+			pv.Frame = true
+			pv.Highlight = true
+			pv.SelBgColor = gocui.ColorBlue
+			pv.SelFgColor = gocui.ColorWhite
+		}
+
+		if pv, err := g.View("priority"); err == nil {
+			pv.Clear()
+			pv.Title = "Priority (Enter: submit, Esc: cancel)"
+			pv.Frame = true
+			pv.Highlight = true
+			pv.SelBgColor = gocui.ColorBlue
+			pv.SelFgColor = gocui.ColorWhite
+			for _, priority := range ui.availablePriorities {
+				priorityIcon := "┄"
+				switch priority.value {
+				case 1:
+					priorityIcon = "🞷"
+				case 2:
+					priorityIcon = "Ⅲ"
+				case 3:
+					priorityIcon = "Ⅱ"
+				case 4:
+					priorityIcon = "Ⅰ"
+				}
+				fmt.Fprintf(pv, "%s %s\n", priorityIcon, priority.label)
+			}
+			pv.SetCursor(0, ui.selectedPriority)
+			g.SetCurrentView("priority")
+		}
+	} else {
+		g.DeleteView("priority")
 	}
 
 	// Comment pane (if enabled)
@@ -875,6 +995,63 @@ func (ui *UI) cancelStatus(g *gocui.Gui, v *gocui.View) error {
 	return nil
 }
 
+func (ui *UI) togglePriority(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		ui.showPriority = true
+		issue := ui.issues[ui.selectedIssue]
+		// Find current priority
+		for i, p := range ui.availablePriorities {
+			if p.value == int(issue.Priority) {
+				ui.selectedPriority = i
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (ui *UI) priorityDown(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedPriority < len(ui.availablePriorities)-1 {
+		ui.selectedPriority++
+		cx, cy := v.Cursor()
+		v.SetCursor(cx, cy+1)
+	}
+	return nil
+}
+
+func (ui *UI) priorityUp(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedPriority > 0 {
+		ui.selectedPriority--
+		cx, cy := v.Cursor()
+		v.SetCursor(cx, cy-1)
+	}
+	return nil
+}
+
+func (ui *UI) submitPriority(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		newPriority := ui.availablePriorities[ui.selectedPriority]
+		issue := ui.issues[ui.selectedIssue]
+		if ui.client != nil {
+			if err := ui.client.UpdateIssuePriority(context.Background(), issue.ID, newPriority.value); err != nil {
+				ui.showToast(fmt.Sprintf("Failed to update priority: %v", err))
+			} else {
+				ui.issues[ui.selectedIssue].Priority = float64(newPriority.value)
+				ui.showToast(fmt.Sprintf("Changed priority to %s for %s", newPriority.label, issue.Identifier))
+			}
+		}
+	}
+	ui.showPriority = false
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) cancelPriority(g *gocui.Gui, v *gocui.View) error {
+	ui.showPriority = false
+	g.SetCurrentView("issues")
+	return nil
+}
+
 func (ui *UI) prevView(g *gocui.Gui, v *gocui.View) error {
 	ui.currentView--
 	if ui.currentView < 0 {
@@ -984,8 +1161,8 @@ func (ui *UI) copyToClipboard(text string, desc string) error {
 	if err := cmd.Wait(); err != nil {
 		return err
 	}
-  
-  ui.showToast(desc + " copied to clipboard")
+
+	ui.showToast(desc + " copied to clipboard")
 	return nil
 }
 

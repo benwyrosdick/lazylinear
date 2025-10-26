@@ -37,7 +37,8 @@ type Issue struct {
 		Type  string `json:"type"`
 		Color string `json:"color"`
 	} `json:"state"`
-	Team struct {
+	Priority float64 `json:"priority"`
+	Team     struct {
 		ID string `json:"id"`
 	} `json:"team"`
 	Assignee struct {
@@ -213,6 +214,7 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 						type
 						color
 					}
+					priority
 					team {
 						id
 					}
@@ -373,6 +375,7 @@ func (c *Client) UpdateIssueStatus(ctx context.Context, issueID string, stateID 
 					state {
 						name
 					}
+					priority
 				}
 			}
 		}
@@ -380,6 +383,41 @@ func (c *Client) UpdateIssueStatus(ctx context.Context, issueID string, stateID 
 
 	req.Var("issueId", issueID)
 	req.Var("stateId", stateID)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		IssueUpdate struct {
+			Success bool `json:"success"`
+		} `json:"issueUpdate"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) UpdateIssuePriority(ctx context.Context, issueID string, priority int) error {
+	req := graphql.NewRequest(`
+		mutation($issueId: String!, $priority: Int!) {
+			issueUpdate(id: $issueId, input: {
+				priority: $priority
+			}) {
+				success
+				issue {
+					id
+					priority
+				}
+			}
+		}
+	`)
+
+	req.Var("issueId", issueID)
+	req.Var("priority", priority)
 
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", c.apiKey)
