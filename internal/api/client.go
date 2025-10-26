@@ -67,10 +67,17 @@ type Viewer struct {
 
 // Team represents a Linear team
 type Team struct {
-	ID     string          `json:"id"`
-	Name   string          `json:"name"`
-	Key    string          `json:"key"`
-	States []WorkflowState `json:"states"`
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Key     string          `json:"key"`
+	States  []WorkflowState `json:"states"`
+	Members []TeamMember    `json:"members"`
+}
+
+// TeamMember represents a team member
+type TeamMember struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // WorkflowState represents a workflow state
@@ -118,15 +125,21 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 					id
 					name
 					key
-				states {
-					nodes {
-						id
-						name
-						position
-						type
-						color
+					states {
+						nodes {
+							id
+							name
+							position
+							type
+							color
+						}
 					}
-				}
+					members {
+						nodes {
+							id
+							name
+						}
+					}
 				}
 			}
 		}
@@ -145,6 +158,9 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 				States struct {
 					Nodes []WorkflowState `json:"nodes"`
 				} `json:"states"`
+				Members struct {
+					Nodes []TeamMember `json:"nodes"`
+				} `json:"members"`
 			} `json:"nodes"`
 		} `json:"teams"`
 	}
@@ -178,10 +194,11 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 		})
 
 		teams[i] = Team{
-			ID:     node.ID,
-			Name:   node.Name,
-			Key:    node.Key,
-			States: states,
+			ID:      node.ID,
+			Name:    node.Name,
+			Key:     node.Key,
+			States:  states,
+			Members: node.Members.Nodes,
 		}
 	}
 
@@ -418,6 +435,48 @@ func (c *Client) UpdateIssuePriority(ctx context.Context, issueID string, priori
 
 	req.Var("issueId", issueID)
 	req.Var("priority", priority)
+
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	var resp struct {
+		IssueUpdate struct {
+			Success bool `json:"success"`
+		} `json:"issueUpdate"`
+	}
+
+	if err := c.client.Run(ctx, req, &resp); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) UpdateIssueAssignee(ctx context.Context, issueID string, assigneeID string) error {
+	req := graphql.NewRequest(`
+		mutation($issueId: String!, $assigneeId: String) {
+			issueUpdate(id: $issueId, input: {
+				assigneeId: $assigneeId
+			}) {
+				success
+				issue {
+					id
+					assignee {
+						id
+						name
+					}
+				}
+			}
+		}
+	`)
+
+	req.Var("issueId", issueID)
+	if assigneeID != "" {
+		req.Var("assigneeId", assigneeID)
+	} else {
+		req.Var("assigneeId", nil)
+	}
 
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", c.apiKey)

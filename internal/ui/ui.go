@@ -40,6 +40,12 @@ type UI struct {
 		label string
 		value int
 	}
+	showAssignee       bool
+	selectedAssignee   int
+	availableAssignees []struct {
+		id   string
+		name string
+	}
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -145,6 +151,12 @@ func NewUI(client *api.Client) (*UI, error) {
 			{"Medium", 3},
 			{"Low", 4},
 		},
+		showAssignee:     false,
+		selectedAssignee: 0,
+		availableAssignees: []struct {
+			id   string
+			name string
+		}{},
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -190,6 +202,9 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", '.', gocui.ModNone, ui.copyBranch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", 'a', gocui.ModNone, ui.toggleAssignee); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", '{', gocui.ModNone, ui.prevTeam); err != nil {
@@ -259,6 +274,24 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("priority", gocui.KeyEsc, gocui.ModNone, ui.cancelPriority); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("assignee", gocui.KeyArrowDown, gocui.ModNone, ui.assigneeDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("assignee", gocui.KeyArrowUp, gocui.ModNone, ui.assigneeUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("assignee", 'j', gocui.ModNone, ui.assigneeDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("assignee", 'k', gocui.ModNone, ui.assigneeUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("assignee", gocui.KeyEnter, gocui.ModNone, ui.submitAssignee); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("assignee", gocui.KeyEsc, gocui.ModNone, ui.cancelAssignee); err != nil {
 		return nil, err
 	}
 
@@ -468,6 +501,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	} else if ui.showPriority {
 		g.SetCurrentView("priority")
 		g.Cursor = false
+	} else if ui.showAssignee {
+		g.SetCurrentView("assignee")
+		g.Cursor = false
 	} else {
 		g.SetCurrentView("issues")
 		g.Cursor = false
@@ -629,6 +665,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
 			fmt.Fprintln(hv, "  s       : Change status of selected issue")
 			fmt.Fprintln(hv, "  p       : Change priority of selected issue")
+			fmt.Fprintln(hv, "  a       : Assign user to selected issue")
 			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
 			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
 			fmt.Fprintln(hv, "  ?       : Toggle this help")
@@ -782,6 +819,54 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 	} else {
 		g.DeleteView("comment")
+	}
+
+	// Assignee pane (if enabled)
+	if ui.showAssignee {
+		assigneeWidth := 40
+		assigneeHeight := len(ui.availableAssignees) + 2
+		assigneeX := (maxX - assigneeWidth) / 2
+		assigneeY := (maxY - assigneeHeight) / 2
+
+		if av, err := g.SetView("assignee", assigneeX, assigneeY, assigneeX+assigneeWidth, assigneeY+assigneeHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			av.Title = "Assignee (Enter: submit, Esc: cancel)"
+			av.Frame = true
+			av.Highlight = true
+			av.SelBgColor = gocui.ColorBlue
+			av.SelFgColor = gocui.ColorWhite
+		}
+
+		if av, err := g.View("assignee"); err == nil {
+			av.Clear()
+			av.Title = "Assignee (Enter: submit, Esc: cancel)"
+			av.Frame = true
+			av.Highlight = true
+			av.SelBgColor = gocui.ColorBlue
+			av.SelFgColor = gocui.ColorWhite
+			for _, assignee := range ui.availableAssignees {
+				initials := "--"
+				if assignee.name != "" && assignee.name != "No assignee" {
+					parts := strings.Fields(assignee.name)
+					if len(parts) >= 2 {
+						initials = strings.ToUpper(string(parts[0][0]) + string(parts[1][0]))
+					} else if len(parts) == 1 {
+						if len(parts[0]) >= 2 {
+							initials = strings.ToUpper(string(parts[0][0]) + string(parts[0][1]))
+						} else {
+							initials = strings.ToUpper(parts[0])
+						}
+					}
+				}
+				fmt.Fprintf(av, "\033[33m%-3s\033[0m %s\n", initials, assignee.name)
+			}
+			av.SetCursor(0, ui.selectedAssignee)
+			g.SetCurrentView("assignee")
+		}
+	} else {
+		g.DeleteView("assignee")
 	}
 
 	return nil
@@ -1254,4 +1339,94 @@ func (ui *UI) filterIssues() []api.Issue {
 		filtered = append(filtered, issue)
 	}
 	return filtered
+}
+
+func (ui *UI) toggleAssignee(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		ui.showAssignee = true
+		issue := ui.issues[ui.selectedIssue]
+
+		ui.availableAssignees = []struct {
+			id   string
+			name string
+		}{
+			{"", "No assignee"},
+		}
+
+		if ui.viewerID != "" {
+			for _, member := range ui.teams[ui.currentTeam].Members {
+				if member.ID == ui.viewerID {
+					ui.availableAssignees = append(ui.availableAssignees, struct {
+						id   string
+						name string
+					}{member.ID, member.Name})
+					break
+				}
+			}
+		}
+
+		for _, member := range ui.teams[ui.currentTeam].Members {
+			if member.ID != ui.viewerID {
+				ui.availableAssignees = append(ui.availableAssignees, struct {
+					id   string
+					name string
+				}{member.ID, member.Name})
+			}
+		}
+
+		for i, a := range ui.availableAssignees {
+			if a.id == issue.Assignee.ID {
+				ui.selectedAssignee = i
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (ui *UI) assigneeDown(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedAssignee < len(ui.availableAssignees)-1 {
+		ui.selectedAssignee++
+		cx, cy := v.Cursor()
+		v.SetCursor(cx, cy+1)
+	}
+	return nil
+}
+
+func (ui *UI) assigneeUp(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && ui.selectedAssignee > 0 {
+		ui.selectedAssignee--
+		cx, cy := v.Cursor()
+		v.SetCursor(cx, cy-1)
+	}
+	return nil
+}
+
+func (ui *UI) submitAssignee(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		newAssignee := ui.availableAssignees[ui.selectedAssignee]
+		issue := ui.issues[ui.selectedIssue]
+		if ui.client != nil {
+			if err := ui.client.UpdateIssueAssignee(context.Background(), issue.ID, newAssignee.id); err != nil {
+				ui.showToast(fmt.Sprintf("Failed to update assignee: %v", err))
+			} else {
+				ui.issues[ui.selectedIssue].Assignee.ID = newAssignee.id
+				ui.issues[ui.selectedIssue].Assignee.Name = newAssignee.name
+				if newAssignee.name == "No assignee" {
+					ui.showToast(fmt.Sprintf("Removed assignee from %s", issue.Identifier))
+				} else {
+					ui.showToast(fmt.Sprintf("Assigned %s to %s", issue.Identifier, newAssignee.name))
+				}
+			}
+		}
+	}
+	ui.showAssignee = false
+	g.SetCurrentView("issues")
+	return nil
+}
+
+func (ui *UI) cancelAssignee(g *gocui.Gui, v *gocui.View) error {
+	ui.showAssignee = false
+	g.SetCurrentView("issues")
+	return nil
 }
