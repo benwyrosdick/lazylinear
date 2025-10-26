@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/benwyrosdick/lazylinear/internal/api"
+	"github.com/charmbracelet/glamour"
 	"github.com/jroimartin/gocui"
 )
 
@@ -18,6 +19,9 @@ type UI struct {
 	issues              []api.Issue
 	allIssues           []api.Issue
 	selectedIssue       int
+	lastRenderedIssue   int
+	renderedDescription string
+	renderedComments    []string
 	showHelp            bool
 	showSearch          bool
 	searchString        string
@@ -54,6 +58,7 @@ type UI struct {
 	createTitle       string
 	createDescription string
 	createActivePane  string
+	mdRenderer        *glamour.TermRenderer
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -128,30 +133,42 @@ func NewUI(client *api.Client) (*UI, error) {
 		}
 	}
 
+	// Create markdown renderer once
+	mdRenderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(80),
+	)
+	if err != nil {
+		mdRenderer = nil
+	}
+
 	ui := &UI{
-		gui:               g,
-		client:            client,
-		issues:            issues,
-		allIssues:         issues,
-		selectedIssue:     -1,
-		showHelp:          false,
-		showSearch:        false,
-		searchString:      "",
-		assignedToMe:      false,
-		viewerID:          viewerID,
-		currentView:       0,
-		views:             []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
-		teams:             teams,
-		currentTeam:       0,
-		showComment:       false,
-		commentContent:    "",
-		toastMessage:      "",
-		toastTimer:        nil,
-		showStatus:        false,
-		selectedStatus:    0,
-		availableStatuses: availableStatuses,
-		showPriority:      false,
-		selectedPriority:  0,
+		gui:                 g,
+		client:              client,
+		issues:              issues,
+		allIssues:           issues,
+		selectedIssue:       -1,
+		lastRenderedIssue:   -1,
+		renderedDescription: "",
+		renderedComments:    nil,
+		showHelp:            false,
+		showSearch:          false,
+		searchString:        "",
+		assignedToMe:        false,
+		viewerID:            viewerID,
+		currentView:         0,
+		views:               []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
+		teams:               teams,
+		currentTeam:         0,
+		showComment:         false,
+		commentContent:      "",
+		toastMessage:        "",
+		toastTimer:          nil,
+		showStatus:          false,
+		selectedStatus:      0,
+		availableStatuses:   availableStatuses,
+		showPriority:        false,
+		selectedPriority:    0,
 		availablePriorities: []struct {
 			label string
 			value int
@@ -172,6 +189,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		editActivePane:   "title",
 		showCreate:       false,
 		createActivePane: "title",
+		mdRenderer:       mdRenderer,
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -610,6 +628,16 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
 
+		// Cache rendered markdown - only re-render if issue changed
+		if ui.selectedIssue != ui.lastRenderedIssue {
+			ui.renderedDescription = ui.renderMarkdown(issue.Description)
+			ui.renderedComments = make([]string, len(issue.Comments.Nodes))
+			for i, comment := range issue.Comments.Nodes {
+				ui.renderedComments[i] = ui.renderMarkdown(comment.Body)
+			}
+			ui.lastRenderedIssue = ui.selectedIssue
+		}
+
 		stateColorCode := "37"
 		if issue.State.Color != "" {
 			if strings.HasPrefix(issue.State.Color, "#") {
@@ -652,12 +680,16 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintf(dv, "\033[35mURL:\033[0m \033[34m%s\033[0m\n", issue.URL)
 		}
 		if issue.Description != "" {
-			fmt.Fprintf(dv, "\n\033[31mDescription:\033[0m\n%s\n", issue.Description)
+			fmt.Fprintf(dv, "\n\033[35mDescription:\033[0m\n")
+			fmt.Fprintf(dv, "%s\n", ui.renderedDescription)
 		}
 		if len(issue.Comments.Nodes) > 0 {
-			fmt.Fprintf(dv, "\n\033[31mComments:\033[0m\n")
-			for _, comment := range issue.Comments.Nodes {
-				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[90m(%s)\033[0m\n%s\n\n", comment.User.Name, comment.CreatedAt, comment.Body)
+			fmt.Fprintf(dv, "\n\033[35mComments:\033[0m\n")
+			for i, comment := range issue.Comments.Nodes {
+				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[90m(%s)\033[0m\n", comment.User.Name, comment.CreatedAt)
+				if i < len(ui.renderedComments) {
+					fmt.Fprintf(dv, "%s\n\n", ui.renderedComments[i])
+				}
 			}
 		}
 	} else {
@@ -1147,6 +1179,7 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
+	ui.lastRenderedIssue = -1 // Invalidate markdown cache
 	return nil
 }
 
@@ -1553,6 +1586,19 @@ func (ui *UI) hexToAnsi(hex string) string {
 	}
 
 	return "37"
+}
+
+func (ui *UI) renderMarkdown(text string) string {
+	if text == "" || ui.mdRenderer == nil {
+		return text
+	}
+
+	rendered, err := ui.mdRenderer.Render(text)
+	if err != nil {
+		return text
+	}
+
+	return strings.TrimSpace(rendered)
 }
 
 func (ui *UI) filterIssues() []api.Issue {
