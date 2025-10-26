@@ -933,7 +933,7 @@ func (ui *UI) copyURL(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
 		if issue.URL != "" {
-			return ui.copyToClipboard(issue.URL)
+			return ui.copyToClipboard(issue.URL, "Issue URL")
 		}
 	}
 	return nil
@@ -943,13 +943,13 @@ func (ui *UI) copyBranch(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
 		if issue.BranchName != "" {
-			return ui.copyToClipboard(issue.BranchName)
+			return ui.copyToClipboard(issue.BranchName, "Git branch name")
 		}
 	}
 	return nil
 }
 
-func (ui *UI) copyToClipboard(text string) error {
+func (ui *UI) copyToClipboard(text string, desc string) error {
 	var cmd *exec.Cmd
 	if _, err := exec.LookPath("xclip"); err == nil {
 		cmd = exec.Command("xclip", "-selection", "clipboard")
@@ -984,8 +984,8 @@ func (ui *UI) copyToClipboard(text string) error {
 	if err := cmd.Wait(); err != nil {
 		return err
 	}
-
-	ui.showToast("Copied to clipboard")
+  
+  ui.showToast(desc + " copied to clipboard")
 	return nil
 }
 
