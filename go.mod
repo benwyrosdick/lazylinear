@@ -1,6 +1,6 @@
 module github.com/benwyrosdick/lazylinear
 
-go 1.25.1
+go 1.21
 
 require (
 	github.com/jroimartin/gocui v0.5.0
