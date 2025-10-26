@@ -349,6 +349,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			return err
 		}
 		dv.Title = "Issue Details"
+		dv.Wrap = true
 	}
 
 	// Update details content
