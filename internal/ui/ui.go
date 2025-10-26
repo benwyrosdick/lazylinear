@@ -195,9 +195,6 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("comment", gocui.KeyCtrlS, gocui.ModNone, ui.submitComment); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("comment", gocui.KeyCtrlQ, gocui.ModNone, ui.cancelComment); err != nil {
-		return nil, err
-	}
 	if err := g.SetKeybinding("comment", gocui.KeyEsc, gocui.ModNone, ui.cancelComment); err != nil {
 		return nil, err
 	}
