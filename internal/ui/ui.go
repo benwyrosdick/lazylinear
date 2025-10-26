@@ -171,7 +171,7 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", '?', gocui.ModNone, ui.toggleHelp); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("issues", 'a', gocui.ModNone, ui.toggleAssigned); err != nil {
+	if err := g.SetKeybinding("issues", 'm', gocui.ModNone, ui.toggleAssigned); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", '/', gocui.ModNone, ui.toggleSearch); err != nil {
@@ -582,7 +582,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 	if sv, err := g.View("status"); err == nil {
 		sv.Clear()
-		status := "j/k/↑/↓: navigate | [/]: switch view | Enter: select | r: refresh | /: search | a: my issues | ?: help | Ctrl+C: quit"
+		status := "j/k/↑/↓: navigate | [/]: switch view | Enter: select | r: refresh | /: search | m: my issues | ?: help | Ctrl+C: quit"
 		if ui.assignedToMe {
 			status = "[My Issues] " + status
 		}
@@ -624,7 +624,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "Actions:")
 			fmt.Fprintln(hv, "  Enter   : Select issue to view details")
 			fmt.Fprintln(hv, "  r       : Refresh issues")
-			fmt.Fprintln(hv, "  a       : Toggle filter by assigned to me")
+			fmt.Fprintln(hv, "  m       : Toggle filter by assigned to me")
 			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
 			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
 			fmt.Fprintln(hv, "  s       : Change status of selected issue")
