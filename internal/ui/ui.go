@@ -228,9 +228,6 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", ']', gocui.ModNone, ui.nextView); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.selectIssue); err != nil {
-		return nil, err
-	}
 	if err := g.SetKeybinding("issues", ',', gocui.ModNone, ui.copyURL); err != nil {
 		return nil, err
 	}
@@ -432,13 +429,13 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			v.Title = "Search (Enter to apply, Esc to cancel)"
+			v.Title = "Search (Enter: apply, Esc: cancel)"
 			v.Editable = true
 			v.Editor = gocui.DefaultEditor
 			fmt.Fprint(v, ui.searchString)
 			v.SetCursor(len(ui.searchString), 0)
 		} else {
-			v.Title = "Search (Enter to apply, Esc to cancel)"
+			v.Title = "Search (Enter: apply, Esc: cancel)"
 		}
 		g.SetCurrentView("search")
 	} else {
@@ -736,7 +733,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 	if sv, err := g.View("status"); err == nil {
 		sv.Clear()
-		status := "j/k/↑/↓: navigate | [/]: switch view | Enter: select | r: refresh | /: search | m: my issues | ?: help | Ctrl+C: quit"
+		status := "j/k/↑/↓: navigate | [/]: switch view | r: refresh | /: search | m: my issues | ?: help | Ctrl+C: quit"
 		if ui.assignedToMe {
 			status = "[My Issues] " + status
 		}
@@ -776,10 +773,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  { / }   : Switch team")
 			fmt.Fprintln(hv, "")
 			fmt.Fprintln(hv, "Actions:")
-			fmt.Fprintln(hv, "  Enter   : Select issue to view details")
 			fmt.Fprintln(hv, "  r       : Refresh issues")
 			fmt.Fprintln(hv, "  m       : Toggle filter by assigned to me")
-			fmt.Fprintln(hv, "  /       : Search issues (Enter to apply, Esc to cancel)")
+			fmt.Fprintln(hv, "  /       : Search issues")
 			fmt.Fprintln(hv, "  n       : Create new issue")
 			fmt.Fprintln(hv, "  c       : Add comment to selected issue")
 			fmt.Fprintln(hv, "  e       : Edit issue title and description")
