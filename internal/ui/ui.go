@@ -298,6 +298,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		v.SelBgColor = gocui.ColorGreen
 		v.SelFgColor = gocui.ColorBlack
 	}
+	v.Highlight = true
+	v.SelBgColor = gocui.ColorGreen
+	v.SelFgColor = gocui.ColorBlack
 
 	viewTitle := ui.views[ui.currentView]
 	if ui.assignedToMe {
@@ -393,9 +396,22 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	}
 
-	// Set focus to issues view (unless search, comment, status, or help is active)
-	if !ui.showSearch && !ui.showComment && !ui.showHelp && !ui.showStatus {
+	// Set focus and cursor
+	if ui.showSearch {
+		g.SetCurrentView("search")
+		g.Cursor = true
+	} else if ui.showComment {
+		g.SetCurrentView("comment")
+		g.Cursor = true
+	} else if ui.showHelp {
+		g.SetCurrentView("help")
+		g.Cursor = false
+	} else if ui.showStatus {
+		g.SetCurrentView("status")
+		g.Cursor = false
+	} else {
 		g.SetCurrentView("issues")
+		g.Cursor = false
 	}
 
 	// Issue details (right side)
