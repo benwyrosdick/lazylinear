@@ -565,9 +565,40 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			sv.Highlight = true
 			sv.SelBgColor = gocui.ColorBlue
 			sv.SelFgColor = gocui.ColorWhite
-			for _, status := range ui.availableStatuses {
-				fmt.Fprintln(sv, status)
+
+			if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+				for _, state := range ui.teams[ui.currentTeam].States {
+					stateIcon := "○"
+					switch state.Type {
+					case "triage":
+						stateIcon = "↔"
+					case "backlog":
+						stateIcon = "◌"
+					case "unstarted":
+						stateIcon = "○"
+					case "started":
+						stateIcon = "◕"
+					case "completed":
+						stateIcon = "✓"
+					case "canceled":
+						stateIcon = "x"
+					}
+
+					colorCode := "37"
+					if state.Color != "" {
+						if strings.HasPrefix(state.Color, "#") {
+							colorCode = ui.hexToAnsi(state.Color)
+						}
+					}
+
+					fmt.Fprintf(sv, "\033[%sm%s\033[0m %s\n", colorCode, stateIcon, state.Name)
+				}
+			} else {
+				for _, status := range ui.availableStatuses {
+					fmt.Fprintln(sv, status)
+				}
 			}
+
 			sv.SetCursor(0, ui.selectedStatus)
 			g.SetCurrentView("status")
 		}
