@@ -310,6 +310,14 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 	// Update issues list
 	v.Clear()
+
+	maxIdentifierLen := 0
+	for _, issue := range ui.issues {
+		if len(issue.Identifier) > maxIdentifierLen {
+			maxIdentifierLen = len(issue.Identifier)
+		}
+	}
+
 	for _, issue := range ui.issues {
 		initials := "--"
 		if issue.Assignee.Name != "" {
@@ -367,7 +375,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
-		fmt.Fprintf(v, "\033[32m%s\033[0m \033[%sm%s\033[0m \033[33m%s\033[0m %s\n", issue.Identifier, colorCode, stateIcon, initials, issue.Title)
+		identifierFmt := fmt.Sprintf("%%-%ds", maxIdentifierLen+1)
+		fmt.Fprintf(v, "\033[32m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n", issue.Identifier, colorCode, stateIcon, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
