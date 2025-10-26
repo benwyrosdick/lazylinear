@@ -376,15 +376,20 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 
 		priorityIcon := "┄"
+		priorityColor := ""
 		switch int(issue.Priority) {
 		case 1:
 			priorityIcon = "🞷"
+			priorityColor = "\033[31m"
 		case 2:
 			priorityIcon = "Ⅲ"
 		case 3:
 			priorityIcon = "Ⅱ"
 		case 4:
 			priorityIcon = "Ⅰ"
+		}
+		if priorityColor != "" {
+			priorityIcon = priorityColor + priorityIcon + "\033[0m"
 		}
 
 		stateIcon := "○"
@@ -430,7 +435,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 
 		identifierFmt := fmt.Sprintf("%%-%ds", maxIdentifierLen+1)
-		fmt.Fprintf(v, "%s \033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n",  priorityIcon, issue.Identifier, colorCode, stateIcon, initials, issue.Title)
+		fmt.Fprintf(v, "%s \033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n", priorityIcon, issue.Identifier, colorCode, stateIcon, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
@@ -496,10 +501,12 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		if issue.Priority > 0 {
 			priorityIcon := "┄"
 			priorityLabel := "No Priority"
+			priorityColor := ""
 			switch int(issue.Priority) {
 			case 1:
 				priorityIcon = "🞷"
 				priorityLabel = "Urgent"
+				priorityColor = "\033[31m"
 			case 2:
 				priorityIcon = "Ⅲ"
 				priorityLabel = "High"
@@ -510,7 +517,11 @@ func (ui *UI) layout(g *gocui.Gui) error {
 				priorityIcon = "Ⅰ"
 				priorityLabel = "Low"
 			}
-			fmt.Fprintf(dv, "\033[35mPriority:\033[0m %s %s\n", priorityIcon, priorityLabel)
+			if priorityColor != "" {
+				fmt.Fprintf(dv, "\033[35mPriority:\033[0m %s%s %s\033[0m\n", priorityColor, priorityIcon, priorityLabel)
+			} else {
+				fmt.Fprintf(dv, "\033[35mPriority:\033[0m %s %s\n", priorityIcon, priorityLabel)
+			}
 		}
 		if issue.Assignee.Name != "" {
 			fmt.Fprintf(dv, "\033[35mAssignee:\033[0m %s\n", issue.Assignee.Name)
@@ -723,9 +734,11 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			pv.SelFgColor = gocui.ColorWhite
 			for _, priority := range ui.availablePriorities {
 				priorityIcon := "┄"
+				priorityColor := ""
 				switch priority.value {
 				case 1:
 					priorityIcon = "🞷"
+					priorityColor = "\033[31m"
 				case 2:
 					priorityIcon = "Ⅲ"
 				case 3:
@@ -733,7 +746,11 @@ func (ui *UI) layout(g *gocui.Gui) error {
 				case 4:
 					priorityIcon = "Ⅰ"
 				}
-				fmt.Fprintf(pv, "%s %s\n", priorityIcon, priority.label)
+				if priorityColor != "" {
+					fmt.Fprintf(pv, "%s%s\033[0m %s\n", priorityColor, priorityIcon, priority.label)
+				} else {
+					fmt.Fprintf(pv, "%s %s\n", priorityIcon, priority.label)
+				}
 			}
 			pv.SetCursor(0, ui.selectedPriority)
 			g.SetCurrentView("priority")
