@@ -399,6 +399,20 @@ func (ui *UI) Close() {
 func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 
+	// Icon Strings
+  urgentPriorityIcon := ""
+  highPriorityIcon := "󰢾"
+  mediumPriorityIcon := "󰢽"
+  lowPriorityIcon := "󰢼"
+  noPriorityIcon := "󰇘"
+
+  triageStateIcon := ""
+  backlogStateIcon := "󱥸"
+  unstartedStateIcon := ""
+  startedStateIcon := "󰪡"
+  completedStateIcon := ""
+  canceledStateIcon := ""
+
 	// Teams bar (top)
 	teamBarHeight := 2
 	if tv, err := g.SetView("teams", 0, 0, maxX-1, teamBarHeight); err != nil {
@@ -495,37 +509,37 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
-		priorityIcon := "┄"
+		priorityIcon := noPriorityIcon
 		priorityColor := ""
 		switch int(issue.Priority) {
 		case 1:
-			priorityIcon = "🞷"
+			priorityIcon = urgentPriorityIcon
 			priorityColor = "\033[31m"
 		case 2:
-			priorityIcon = "Ⅲ"
+			priorityIcon = highPriorityIcon
 		case 3:
-			priorityIcon = "Ⅱ"
+			priorityIcon = mediumPriorityIcon
 		case 4:
-			priorityIcon = "Ⅰ"
+			priorityIcon = lowPriorityIcon
 		}
 		if priorityColor != "" {
 			priorityIcon = priorityColor + priorityIcon + "\033[0m"
 		}
 
-		stateIcon := "○"
+		stateIcon := unstartedStateIcon
 		switch issue.State.Type {
 		case "triage":
-			stateIcon = "↔"
+			stateIcon = triageStateIcon
 		case "backlog":
-			stateIcon = "◌"
+			stateIcon = backlogStateIcon
 		case "unstarted":
-			stateIcon = "○"
+			stateIcon = unstartedStateIcon
 		case "started":
-			stateIcon = "◕"
+			stateIcon = startedStateIcon
 		case "completed":
-			stateIcon = "✓"
+			stateIcon = completedStateIcon
 		case "canceled":
-			stateIcon = "x"
+			stateIcon = canceledStateIcon
 		}
 
 		colorCode := "37"
@@ -646,22 +660,22 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
 		fmt.Fprintf(dv, "\033[35mState:\033[0m \033[%sm%s\033[0m\n", stateColorCode, issue.State.Name)
 		if issue.Priority > 0 {
-			priorityIcon := "┄"
+			priorityIcon := noPriorityIcon
 			priorityLabel := "No Priority"
 			priorityColor := ""
 			switch int(issue.Priority) {
 			case 1:
-				priorityIcon = "🞷"
+				priorityIcon = urgentPriorityIcon
 				priorityLabel = "Urgent"
 				priorityColor = "\033[31m"
 			case 2:
-				priorityIcon = "Ⅲ"
+				priorityIcon = highPriorityIcon
 				priorityLabel = "High"
 			case 3:
-				priorityIcon = "Ⅱ"
+				priorityIcon = mediumPriorityIcon
 				priorityLabel = "Medium"
 			case 4:
-				priorityIcon = "Ⅰ"
+				priorityIcon = lowPriorityIcon
 				priorityLabel = "Low"
 			}
 			if priorityColor != "" {
@@ -825,17 +839,17 @@ func (ui *UI) layout(g *gocui.Gui) error {
 					stateIcon := "○"
 					switch state.Type {
 					case "triage":
-						stateIcon = "↔"
+						stateIcon = triageStateIcon
 					case "backlog":
-						stateIcon = "◌"
+						stateIcon = backlogStateIcon
 					case "unstarted":
-						stateIcon = "○"
+						stateIcon = unstartedStateIcon
 					case "started":
-						stateIcon = "◕"
+						stateIcon = startedStateIcon
 					case "completed":
-						stateIcon = "✓"
+						stateIcon = completedStateIcon
 					case "canceled":
-						stateIcon = "x"
+						stateIcon = canceledStateIcon
 					}
 
 					colorCode := "37"
@@ -886,18 +900,18 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			pv.SelBgColor = gocui.ColorBlue
 			pv.SelFgColor = gocui.ColorWhite
 			for _, priority := range ui.availablePriorities {
-				priorityIcon := "┄"
+				priorityIcon := noPriorityIcon
 				priorityColor := ""
 				switch priority.value {
 				case 1:
-					priorityIcon = "🞷"
+					priorityIcon = urgentPriorityIcon
 					priorityColor = "\033[31m"
 				case 2:
-					priorityIcon = "Ⅲ"
+					priorityIcon = highPriorityIcon
 				case 3:
-					priorityIcon = "Ⅱ"
+					priorityIcon = mediumPriorityIcon
 				case 4:
-					priorityIcon = "Ⅰ"
+					priorityIcon = lowPriorityIcon
 				}
 				if priorityColor != "" {
 					fmt.Fprintf(pv, "%s%s\033[0m %s\n", priorityColor, priorityIcon, priority.label)
