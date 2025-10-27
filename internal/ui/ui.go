@@ -400,18 +400,18 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 
 	// Icon Strings
-  urgentPriorityIcon := ""
-  highPriorityIcon := "󰢾"
-  mediumPriorityIcon := "󰢽"
-  lowPriorityIcon := "󰢼"
-  noPriorityIcon := "󰇘"
+	urgentPriorityIcon := ""
+	highPriorityIcon := "󰢾"
+	mediumPriorityIcon := "󰢽"
+	lowPriorityIcon := "󰢼"
+	noPriorityIcon := "󰇘"
 
-  triageStateIcon := ""
-  backlogStateIcon := "󱥸"
-  unstartedStateIcon := ""
-  startedStateIcon := "󰪡"
-  completedStateIcon := ""
-  canceledStateIcon := ""
+	triageStateIcon := ""
+	backlogStateIcon := "󱥸"
+	unstartedStateIcon := ""
+	startedStateIcon := "󰪡"
+	completedStateIcon := ""
+	canceledStateIcon := ""
 
 	// Teams bar (top)
 	teamBarHeight := 2
@@ -1129,19 +1129,15 @@ func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
 		return nil
 	}
 	if v != nil && len(ui.issues) > 0 {
-		cx, cy := v.Cursor()
+		_, cy := v.Cursor()
 		ox, oy := v.Origin()
-		_, maxY := v.Size()
 
-		if cy < len(ui.issues)-1 {
-			if err := v.SetCursor(cx, cy+1); err != nil {
-				if cy+1 >= maxY-1 {
-					if err := v.SetOrigin(ox, oy+1); err != nil {
-						return err
-					}
+		if cy+oy+1 < len(ui.issues) {
+			if err := v.SetCursor(0, cy+1); err != nil {
+				if err := v.SetOrigin(ox, oy+1); err != nil {
+					return err
 				}
 			}
-			ui.selectedIssue = cy + 1
 		}
 	}
 	return nil
