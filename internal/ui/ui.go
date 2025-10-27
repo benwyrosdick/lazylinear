@@ -59,6 +59,9 @@ type UI struct {
 	createDescription string
 	createActivePane  string
 	mdRenderer        *glamour.TermRenderer
+	loading           bool
+	spinnerFrame      int
+	loadingTimer      *time.Timer
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -99,40 +102,6 @@ func NewUI(client *api.Client) (*UI, error) {
 	g.SelFgColor = gocui.ColorGreen // Active pane border color
 	g.FgColor = gocui.ColorDefault  // Inactive pane border color
 
-	// Fetch teams and issues
-	var issues []api.Issue
-	var teams []api.Team
-	var viewerID string
-	var apiErr error
-	var fetchedIssues []api.Issue
-	if client != nil {
-		if fetchedTeams, err := client.GetTeams(context.Background()); err == nil {
-			teams = fetchedTeams
-		}
-		teamID := ""
-		if len(teams) > 0 {
-			teamID = teams[0].ID
-		}
-		fetchedIssues, apiErr = client.GetIssues(context.Background(), teamID)
-		if viewer, err := client.GetViewer(context.Background()); err == nil {
-			viewerID = viewer.ID
-		}
-	} else {
-		apiErr = fmt.Errorf("no client")
-	}
-	if apiErr == nil {
-		issues = fetchedIssues
-	} else {
-		issues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", apiErr)}}
-	}
-
-	var availableStatuses []string
-	if len(teams) > 0 {
-		for _, state := range teams[0].States {
-			availableStatuses = append(availableStatuses, state.Name)
-		}
-	}
-
 	// Create markdown renderer once
 	mdRenderer, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
@@ -145,8 +114,8 @@ func NewUI(client *api.Client) (*UI, error) {
 	ui := &UI{
 		gui:                 g,
 		client:              client,
-		issues:              issues,
-		allIssues:           issues,
+		issues:              []api.Issue{},
+		allIssues:           []api.Issue{},
 		selectedIssue:       -1,
 		lastRenderedIssue:   -1,
 		renderedDescription: "",
@@ -155,10 +124,10 @@ func NewUI(client *api.Client) (*UI, error) {
 		showSearch:          false,
 		searchString:        "",
 		assignedToMe:        false,
-		viewerID:            viewerID,
+		viewerID:            "",
 		currentView:         0,
 		views:               []string{"All", "Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
-		teams:               teams,
+		teams:               []api.Team{},
 		currentTeam:         0,
 		showComment:         false,
 		commentContent:      "",
@@ -166,7 +135,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		toastTimer:          nil,
 		showStatus:          false,
 		selectedStatus:      0,
-		availableStatuses:   availableStatuses,
+		availableStatuses:   []string{},
 		showPriority:        false,
 		selectedPriority:    0,
 		availablePriorities: []struct {
@@ -190,6 +159,9 @@ func NewUI(client *api.Client) (*UI, error) {
 		showCreate:       false,
 		createActivePane: "title",
 		mdRenderer:       mdRenderer,
+		loading:          true,
+		spinnerFrame:     0,
+		loadingTimer:     nil,
 	}
 
 	g.SetManagerFunc(ui.layout)
@@ -388,6 +360,12 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 
+	// Start spinner animation
+	ui.startSpinner()
+
+	// Load data in background
+	go ui.loadData()
+
 	return ui, nil
 }
 
@@ -404,6 +382,45 @@ func (ui *UI) Close() {
 
 func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
+
+	// Show loading spinner if still loading
+	if ui.loading {
+		spinnerChars := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		spinnerWidth := 80
+		spinnerHeight := 12
+		spinnerX := (maxX - spinnerWidth) / 2
+		spinnerY := (maxY - spinnerHeight) / 2
+
+		if sv, err := g.SetView("spinner", spinnerX, spinnerY, spinnerX+spinnerWidth, spinnerY+spinnerHeight); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			sv.Frame = false
+		}
+
+		if sv, err := g.View("spinner"); err == nil {
+			sv.Clear()
+			spinner := spinnerChars[ui.spinnerFrame%len(spinnerChars)]
+
+			// ASCII art for LazyLinear
+			fmt.Fprintf(sv, "\n")
+			fmt.Fprintf(sv, "     _                     _     _                       \n")
+			fmt.Fprintf(sv, "    | |                   | |   (_)                      \n")
+			fmt.Fprintf(sv, "    | |     __ _ _____   _| |    _ _ __   ___  __ _ _ __ \n")
+			fmt.Fprintf(sv, "    | |    / _` |_  / | | | |   | | '_ \\ / _ \\/ _` | '__|\n")
+			fmt.Fprintf(sv, "    | |___| (_| |/ /| |_| | |___| | | | |  __/ (_| | |   \n")
+			fmt.Fprintf(sv, "    |______\\__,_/___|\\__, |_____|_|_| |_|\\___|\\__,_|_|   \n")
+			fmt.Fprintf(sv, "                      __/ |                              \n")
+			fmt.Fprintf(sv, "                     |___/                               \n")
+			fmt.Fprintf(sv, "\n")
+			fmt.Fprintf(sv, "                      %s Loading data...\n", spinner)
+		}
+
+		return nil
+	}
+
+	// Delete spinner view once loaded
+	g.DeleteView("spinner")
 
 	// Icon Strings
 	urgentPriorityIcon := ""
@@ -1939,4 +1956,72 @@ func (ui *UI) clickCreateDescription(g *gocui.Gui, v *gocui.View) error {
 		}
 	}
 	return nil
+}
+
+// startSpinner starts the spinner animation
+func (ui *UI) startSpinner() {
+	ui.loadingTimer = time.AfterFunc(100*time.Millisecond, func() {
+		ui.spinnerFrame++
+		ui.gui.Update(func(g *gocui.Gui) error {
+			return nil
+		})
+		if ui.loading {
+			ui.startSpinner()
+		}
+	})
+}
+
+// loadData loads teams and issues in the background
+func (ui *UI) loadData() {
+	var issues []api.Issue
+	var teams []api.Team
+	var viewerID string
+	var apiErr error
+	var fetchedIssues []api.Issue
+
+	if ui.client != nil {
+		if fetchedTeams, err := ui.client.GetTeams(context.Background()); err == nil {
+			teams = fetchedTeams
+		}
+		teamID := ""
+		if len(teams) > 0 {
+			teamID = teams[0].ID
+		}
+		fetchedIssues, apiErr = ui.client.GetIssues(context.Background(), teamID)
+		if viewer, err := ui.client.GetViewer(context.Background()); err == nil {
+			viewerID = viewer.ID
+		}
+	} else {
+		apiErr = fmt.Errorf("no client")
+	}
+
+	if apiErr == nil {
+		issues = fetchedIssues
+	} else {
+		issues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", apiErr)}}
+	}
+
+	var availableStatuses []string
+	if len(teams) > 0 {
+		for _, state := range teams[0].States {
+			availableStatuses = append(availableStatuses, state.Name)
+		}
+	}
+
+	// Update UI with loaded data
+	ui.gui.Update(func(g *gocui.Gui) error {
+		ui.issues = issues
+		ui.allIssues = issues
+		ui.teams = teams
+		ui.viewerID = viewerID
+		ui.availableStatuses = availableStatuses
+
+		// Stop loading
+		if ui.loadingTimer != nil {
+			ui.loadingTimer.Stop()
+		}
+		ui.loading = false
+
+		return nil
+	})
 }
