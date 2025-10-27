@@ -215,7 +215,7 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 				team: { id: { eq: $teamID } }
 				state: {
 					name: {
-						in: ["In Review", "In Progress", "Blocked", "Todo", "Backlog"]
+						in: ["Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"]
 					}
 				}
 			}) {

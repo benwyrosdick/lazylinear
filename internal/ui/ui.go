@@ -157,7 +157,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		assignedToMe:        false,
 		viewerID:            viewerID,
 		currentView:         0,
-		views:               []string{"All", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
+		views:               []string{"All", "Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
 		teams:               teams,
 		currentTeam:         0,
 		showComment:         false,
@@ -783,7 +783,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "Navigation:")
 			fmt.Fprintln(hv, "  j / ↓   : Move down")
 			fmt.Fprintln(hv, "  k / ↑   : Move up")
-			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/In Review/In Progress/Blocked/Todo/Backlog)")
+			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/Triage/In Review/In Progress/Blocked/Todo/Backlog)")
 			fmt.Fprintln(hv, "  { / }   : Switch team")
 			fmt.Fprintln(hv, "")
 			fmt.Fprintln(hv, "Actions:")
