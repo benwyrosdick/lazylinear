@@ -568,8 +568,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
-		identifierFmt := fmt.Sprintf("%%-%ds", maxIdentifierLen+1)
-		fmt.Fprintf(v, "%s \033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m \033[33m%-3s\033[0m %s\n", priorityIcon, issue.Identifier, colorCode, stateIcon, initials, issue.Title)
+		identifierFmt := fmt.Sprintf("%%-%ds", maxIdentifierLen)
+		fmt.Fprintf(v, "%s \033[36m"+identifierFmt+"\033[0m \033[%sm%s\033[0m  \033[33m%s\033[0m  %s\n", priorityIcon, issue.Identifier, colorCode, stateIcon, initials, issue.Title)
 	}
 
 	// Set cursor to first item if needed
