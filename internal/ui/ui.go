@@ -351,7 +351,13 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("edit_title", gocui.MouseLeft, gocui.ModNone, ui.clickEditTitle); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("edit_title", gocui.MouseRelease, gocui.ModNone, ui.releaseEditPane); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("edit_description", gocui.MouseLeft, gocui.ModNone, ui.clickEditDescription); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("edit_description", gocui.MouseRelease, gocui.ModNone, ui.releaseEditPane); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("create_title", gocui.KeyTab, gocui.ModNone, ui.switchCreatePane); err != nil {
@@ -1787,13 +1793,24 @@ func (ui *UI) clickEditTitle(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		ui.editActivePane = "title"
 		g.SetCurrentView("edit_title")
-
-		content := strings.TrimRight(v.Buffer(), "\n")
-		lineLen := len(content)
-		if lineLen > 0 {
-			v.SetCursor(lineLen, 0)
-		}
 	}
+	return nil
+}
+
+func (ui *UI) releaseEditPane(g *gocui.Gui, v *gocui.View) error {
+	x, y := v.Cursor()
+	
+	content := strings.TrimRight(v.Buffer(), "\n")
+	lines := strings.Split(content, "\n")
+
+	if y > len(lines)-1 {
+		lastLine := len(lines) - 1
+		lastLineLen := len(lines[lastLine])
+		v.SetCursor(lastLineLen, lastLine)
+	} else if x > len(lines[y]) {
+		v.SetCursor(len(lines[y]), y)
+	}
+
 	return nil
 }
 
