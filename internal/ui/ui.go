@@ -490,6 +490,13 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	completedStateIcon := ""
 	canceledStateIcon := ""
 
+	searchIcon := ""
+	// commentIcon := ""
+	// editIcon := ""
+	// newIcon := "󱈀"
+	// userIcon := ""
+	// stateIcon := "󱇯"
+
 	// Teams bar (top)
 	teamBarHeight := 2
 	if tv, err := g.SetView("teams", 0, 0, maxX-1, teamBarHeight); err != nil {
@@ -516,17 +523,18 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 	// Search bar (if enabled)
 	if ui.showSearch {
+		title := searchIcon + "Search (Enter: apply, Esc: cancel)"
 		if v, err := g.SetView("search", 0, maxY-4, maxX-1, maxY-2); err != nil {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
-			v.Title = "Search (Enter: apply, Esc: cancel)"
+			v.Title = title
 			v.Editable = true
 			v.Editor = gocui.DefaultEditor
 			fmt.Fprint(v, ui.searchString)
 			v.SetCursor(len(ui.searchString), 0)
 		} else {
-			v.Title = "Search (Enter: apply, Esc: cancel)"
+			v.Title = title
 		}
 		g.SetCurrentView("search")
 	} else {
