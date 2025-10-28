@@ -243,6 +243,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("comment", gocui.KeyEsc, gocui.ModNone, ui.cancelComment); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("comment", gocui.MouseRelease, gocui.ModNone, ui.releaseEditPane); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("help", '?', gocui.ModNone, ui.toggleHelp); err != nil {
 		return nil, err
 	}
