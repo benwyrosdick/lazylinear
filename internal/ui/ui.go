@@ -1649,8 +1649,13 @@ func (ui *UI) filterIssues() []api.Issue {
 		if currentViewName != "All" && issue.State.Name != currentViewName {
 			continue
 		}
-		if ui.searchString != "" && !strings.Contains(strings.ToLower(issue.Title), strings.ToLower(ui.searchString)) {
-			continue
+		if ui.searchString != "" {
+			searchLower := strings.ToLower(ui.searchString)
+			titleMatch := strings.Contains(strings.ToLower(issue.Title), searchLower)
+			identifierMatch := strings.Contains(strings.ToLower(issue.Identifier), searchLower)
+			if !titleMatch && !identifierMatch {
+				continue
+			}
 		}
 		filtered = append(filtered, issue)
 	}
