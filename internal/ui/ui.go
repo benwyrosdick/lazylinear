@@ -371,7 +371,15 @@ func NewUI(client *api.Client) (*UI, error) {
 
 // Run starts the UI main loop
 func (ui *UI) Run() error {
-	defer ui.gui.Close()
+	defer func() {
+		if ui.loadingTimer != nil {
+			ui.loadingTimer.Stop()
+		}
+		if ui.toastTimer != nil {
+			ui.toastTimer.Stop()
+		}
+		ui.gui.Close()
+	}()
 	return ui.gui.MainLoop()
 }
 
@@ -1816,7 +1824,7 @@ func (ui *UI) clickEditTitle(g *gocui.Gui, v *gocui.View) error {
 
 func (ui *UI) releaseEditPane(g *gocui.Gui, v *gocui.View) error {
 	x, y := v.Cursor()
-	
+
 	content := strings.TrimRight(v.Buffer(), "\n")
 	lines := strings.Split(content, "\n")
 
@@ -2016,12 +2024,15 @@ func (ui *UI) loadData() {
 		ui.viewerID = viewerID
 		ui.availableStatuses = availableStatuses
 
-		// Stop loading
 		if ui.loadingTimer != nil {
 			ui.loadingTimer.Stop()
 		}
 		ui.loading = false
 
+		return nil
+	})
+
+	ui.gui.Update(func(g *gocui.Gui) error {
 		return nil
 	})
 }
