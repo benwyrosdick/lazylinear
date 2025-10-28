@@ -762,30 +762,45 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.DeleteView("toast")
 	}
 
-	// Status bar (bottom)
-	statusY := maxY - 2
+	// Keybindings bar (bottom)
+	keybindingsY := maxY - 2
 	if ui.showSearch {
-		statusY = maxY - 1
+		keybindingsY = maxY - 1
 	}
 	if ui.toastMessage != "" {
-		statusY -= 3
+		keybindingsY -= 3
 	}
-	if v, err := g.SetView("status", 0, statusY, maxX-1, maxY); err != nil {
+	if v, err := g.SetView("keybindings", 0, keybindingsY, maxX-1, maxY); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
 		v.Frame = false
 	}
-	if sv, err := g.View("status"); err == nil {
-		sv.Clear()
-		status := "j/k/↑/↓: navigate | [/]: switch view | r: refresh | /: search | m: my issues | ?: help | Ctrl+C: quit"
-		if ui.assignedToMe {
-			status = "[My Issues] " + status
+	if kv, err := g.View("keybindings"); err == nil {
+		kv.Clear()
+
+		var keybindings string
+		if ui.showSearch {
+			keybindings = "apply: Enter | cancel: Esc"
+		} else if ui.showComment {
+			keybindings = "submit: ctrl+s | cancel: esc"
+		} else if ui.showStatus {
+			keybindings = "navigate: ↑↓/jk | select: enter | cancel: esc"
+		} else if ui.showPriority {
+			keybindings = "navigate: ↑↓/jk | select: enter | cancel: esc"
+		} else if ui.showAssignee {
+			keybindings = "navigate: ↑↓/jk | select: enter | cancel: esc"
+		} else if ui.showEdit {
+			keybindings = "switch pane: tab | save: ctrl+s | cancel: esc"
+		} else if ui.showCreate {
+			keybindings = "switch pane: tab | create: ctrl+s | cancel: esc"
+		} else if ui.showHelp {
+			keybindings = "close: ? / esc"
+		} else {
+			keybindings = "navigate: ↑↓/jk | views: [ / ] | teams: { / } | [r]efresh | search: / | [m]y issues | [n]ew | [e]dit | [s]tatus | [p]riority | [a]ssign | [c]omment | copy url: , | copy branch: . | help: ? | quit: ctrl+c"
 		}
-		if ui.searchString != "" {
-			status = fmt.Sprintf("[Search: %s] %s", ui.searchString, status)
-		}
-		fmt.Fprintln(sv, status)
+
+		fmt.Fprintf(kv, "\033[34m%s\033[0m", keybindings)
 	}
 
 	// Modals (rendered last so they appear on top)
