@@ -1214,6 +1214,9 @@ func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
 					return err
 				}
 			}
+			if dv, err := g.View("details"); err == nil {
+				dv.SetOrigin(0, 0)
+			}
 		}
 	}
 	return nil
@@ -1232,11 +1235,17 @@ func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
 				return err
 			}
 			ui.selectedIssue = cy - 1
+			if dv, err := g.View("details"); err == nil {
+				dv.SetOrigin(0, 0)
+			}
 		} else if oy > 0 {
 			if err := v.SetOrigin(ox, oy-1); err != nil {
 				return err
 			}
 			ui.selectedIssue = cy - 1
+			if dv, err := g.View("details"); err == nil {
+				dv.SetOrigin(0, 0)
+			}
 		}
 	}
 	return nil
