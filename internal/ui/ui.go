@@ -62,6 +62,7 @@ type UI struct {
 	loading           bool
 	spinnerFrame      int
 	loadingTimer      *time.Timer
+	lastActiveView    string
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -363,6 +364,30 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", 'h', gocui.ModNone, ui.focusIssues); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", gocui.KeyEsc, gocui.ModNone, ui.focusIssues); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", ',', gocui.ModNone, ui.copyURL); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", '.', gocui.ModNone, ui.copyBranch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'a', gocui.ModNone, ui.toggleAssignee); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'c', gocui.ModNone, ui.toggleComment); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'e', gocui.ModNone, ui.toggleEdit); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 's', gocui.ModNone, ui.toggleStatus); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'p', gocui.ModNone, ui.togglePriority); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", gocui.KeyArrowDown, gocui.ModNone, ui.scrollDetailsDown); err != nil {
@@ -825,7 +850,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		} else if ui.showHelp {
 			keybindings = "close: ? / esc"
 		} else if currentView != nil && currentView.Name() == "details" {
-			keybindings = "scroll: ↑↓/jk : back to issues: h | [r]efresh | search: / help: ? | quit: ctrl+c"
+			keybindings = "scroll: ↑↓/jk : back to issues: h | [r]efresh | [e]dit | [s]tatus | [p]riority | [a]ssign | [c]omment | copy url: , | copy branch: . | help: ? | quit: ctrl+c"
 		} else {
 			keybindings = "navigate: ↑↓/jk | views: [ / ] | teams: { / } | [r]efresh | search: / | [m]y issues | [n]ew | [e]dit | [s]tatus | [p]riority | [a]ssign | [c]omment | copy url: , | copy branch: . | help: ? | quit: ctrl+c"
 		}
@@ -1337,6 +1362,10 @@ func (ui *UI) cancelSearch(g *gocui.Gui, v *gocui.View) error {
 
 func (ui *UI) toggleComment(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		cv := g.CurrentView()
+		if cv != nil {
+			ui.lastActiveView = cv.Name()
+		}
 		ui.showComment = true
 		ui.commentContent = ""
 	}
@@ -1360,7 +1389,11 @@ func (ui *UI) submitComment(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.showComment = false
 	ui.commentContent = ""
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
@@ -1371,12 +1404,20 @@ func (ui *UI) cancelComment(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.showComment = false
 	ui.commentContent = ""
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) toggleStatus(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		cv := g.CurrentView()
+		if cv != nil {
+			ui.lastActiveView = cv.Name()
+		}
 		ui.showStatus = true
 		issue := ui.issues[ui.selectedIssue]
 		for i, status := range ui.availableStatuses {
@@ -1432,21 +1473,32 @@ func (ui *UI) submitStatus(g *gocui.Gui, v *gocui.View) error {
 		}
 	}
 	ui.showStatus = false
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) cancelStatus(g *gocui.Gui, v *gocui.View) error {
 	ui.showStatus = false
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) togglePriority(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		cv := g.CurrentView()
+		if cv != nil {
+			ui.lastActiveView = cv.Name()
+		}
 		ui.showPriority = true
 		issue := ui.issues[ui.selectedIssue]
-		// Find current priority
 		for i, p := range ui.availablePriorities {
 			if p.value == int(issue.Priority) {
 				ui.selectedPriority = i
@@ -1489,13 +1541,21 @@ func (ui *UI) submitPriority(g *gocui.Gui, v *gocui.View) error {
 		}
 	}
 	ui.showPriority = false
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) cancelPriority(g *gocui.Gui, v *gocui.View) error {
 	ui.showPriority = false
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
@@ -1718,6 +1778,10 @@ func (ui *UI) filterIssues() []api.Issue {
 
 func (ui *UI) toggleAssignee(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		cv := g.CurrentView()
+		if cv != nil {
+			ui.lastActiveView = cv.Name()
+		}
 		ui.showAssignee = true
 		issue := ui.issues[ui.selectedIssue]
 
@@ -1796,18 +1860,30 @@ func (ui *UI) submitAssignee(g *gocui.Gui, v *gocui.View) error {
 		}
 	}
 	ui.showAssignee = false
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) cancelAssignee(g *gocui.Gui, v *gocui.View) error {
 	ui.showAssignee = false
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) toggleEdit(g *gocui.Gui, v *gocui.View) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		cv := g.CurrentView()
+		if cv != nil {
+			ui.lastActiveView = cv.Name()
+		}
 		issue := ui.issues[ui.selectedIssue]
 		ui.editTitle = issue.Title
 		ui.editDescription = issue.Description
@@ -1862,14 +1938,22 @@ func (ui *UI) submitEdit(g *gocui.Gui, v *gocui.View) error {
 
 	ui.showEdit = false
 	ui.editActivePane = "title"
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) cancelEdit(g *gocui.Gui, v *gocui.View) error {
 	ui.showEdit = false
 	ui.editActivePane = "title"
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
@@ -1928,6 +2012,10 @@ func (ui *UI) clickIssues(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) toggleCreate(g *gocui.Gui, v *gocui.View) error {
+	cv := g.CurrentView()
+	if cv != nil {
+		ui.lastActiveView = cv.Name()
+	}
 	ui.createTitle = ""
 	ui.createDescription = ""
 	ui.createActivePane = "title"
@@ -1984,14 +2072,22 @@ func (ui *UI) submitCreate(g *gocui.Gui, v *gocui.View) error {
 
 	ui.showCreate = false
 	ui.createActivePane = "title"
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
 func (ui *UI) cancelCreate(g *gocui.Gui, v *gocui.View) error {
 	ui.showCreate = false
 	ui.createActivePane = "title"
-	g.SetCurrentView("issues")
+	if ui.lastActiveView != "" {
+		g.SetCurrentView(ui.lastActiveView)
+	} else {
+		g.SetCurrentView("issues")
+	}
 	return nil
 }
 
