@@ -359,6 +359,24 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", gocui.MouseLeft, gocui.ModNone, ui.clickIssues); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", 'l', gocui.ModNone, ui.focusDetails); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'h', gocui.ModNone, ui.focusIssues); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", gocui.KeyArrowDown, gocui.ModNone, ui.scrollDetailsDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", gocui.KeyArrowUp, gocui.ModNone, ui.scrollDetailsUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'j', gocui.ModNone, ui.scrollDetailsDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'k', gocui.ModNone, ui.scrollDetailsUp); err != nil {
+		return nil, err
+	}
 
 	// Start spinner animation
 	ui.startSpinner()
@@ -651,7 +669,10 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.SetCurrentView("assignee")
 		g.Cursor = false
 	} else {
-		g.SetCurrentView("issues")
+		cv := g.CurrentView()
+		if cv == nil || (cv.Name() != "issues" && cv.Name() != "details") {
+			g.SetCurrentView("issues")
+		}
 		g.Cursor = false
 	}
 
@@ -663,6 +684,12 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 		dv.Title = "Issue Details"
 		dv.Wrap = true
+		dv.Autoscroll = false
+	}
+
+	currentView := g.CurrentView()
+	if currentView != nil && currentView.Name() == "details" {
+		dv.Title = "Issue Details [h: back to issues]"
 	}
 
 	// Update details content
@@ -780,6 +807,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		kv.Clear()
 
 		var keybindings string
+		currentView := g.CurrentView()
 		if ui.showSearch {
 			keybindings = "apply: Enter | cancel: Esc"
 		} else if ui.showComment {
@@ -796,6 +824,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			keybindings = "switch pane: tab | create: ctrl+s | cancel: esc"
 		} else if ui.showHelp {
 			keybindings = "close: ? / esc"
+		} else if currentView != nil && currentView.Name() == "details" {
+			keybindings = "scroll: ↑↓/jk : back to issues: h | [r]efresh | search: / help: ? | quit: ctrl+c"
 		} else {
 			keybindings = "navigate: ↑↓/jk | views: [ / ] | teams: { / } | [r]efresh | search: / | [m]y issues | [n]ew | [e]dit | [s]tatus | [p]riority | [a]ssign | [c]omment | copy url: , | copy branch: . | help: ? | quit: ctrl+c"
 		}
@@ -2055,4 +2085,46 @@ func (ui *UI) loadData() {
 	ui.gui.Update(func(g *gocui.Gui) error {
 		return nil
 	})
+}
+
+func (ui *UI) focusDetails(g *gocui.Gui, v *gocui.View) error {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
+		return nil
+	}
+	g.SetCurrentView("details")
+	g.Cursor = false
+	return nil
+}
+
+func (ui *UI) focusIssues(g *gocui.Gui, v *gocui.View) error {
+	g.SetCurrentView("issues")
+	g.Cursor = false
+	return nil
+}
+
+func (ui *UI) scrollDetailsDown(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		_, viewHeight := v.Size()
+		lines := len(v.BufferLines())
+		ox, oy := v.Origin()
+
+		if oy+viewHeight < lines {
+			if err := v.SetOrigin(ox, oy+1); err != nil {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (ui *UI) scrollDetailsUp(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		ox, oy := v.Origin()
+		if oy > 0 {
+			if err := v.SetOrigin(ox, oy-1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
