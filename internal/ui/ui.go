@@ -363,6 +363,12 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", gocui.MouseLeft, gocui.ModNone, ui.clickIssues); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", gocui.MouseWheelDown, gocui.ModNone, ui.scrollIssuesDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", gocui.MouseWheelUp, gocui.ModNone, ui.scrollIssuesUp); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("issues", 'l', gocui.ModNone, ui.focusDetails); err != nil {
 		return nil, err
 	}
@@ -403,6 +409,12 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", 'k', gocui.ModNone, ui.scrollDetailsUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", gocui.MouseWheelDown, gocui.ModNone, ui.scrollDetailsDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", gocui.MouseWheelUp, gocui.ModNone, ui.scrollDetailsUp); err != nil {
 		return nil, err
 	}
 
@@ -567,6 +579,20 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if ui.searchString != "" {
 		viewTitle = viewTitle + " [" + ui.searchString + "]"
 	}
+
+	// Add scroll indicator
+	if len(ui.issues) > 0 {
+		_, viewHeight := v.Size()
+		_, oy := v.Origin()
+		totalLines := len(ui.issues)
+		if totalLines > viewHeight {
+			scrollPercent := int((float64(oy) / float64(totalLines-viewHeight)) * 100)
+			if scrollPercent > 100 {
+				scrollPercent = 100
+			}
+			viewTitle = fmt.Sprintf("%s (%d%%)", viewTitle, scrollPercent)
+		}
+	}
 	v.Title = viewTitle
 
 	// Update issues list
@@ -660,14 +686,29 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// Set cursor to first item if needed
 	if len(ui.issues) > 0 && !ui.showEdit && !ui.showCreate && !ui.showComment && !ui.showStatus && !ui.showPriority && !ui.showAssignee {
 		_, cy := v.Cursor()
-		if cy >= len(ui.issues) {
-			v.SetCursor(0, len(ui.issues)-1)
+		_, oy := v.Origin()
+		_, viewHeight := v.Size()
+
+		// Adjust selectedIssue bounds if needed
+		if ui.selectedIssue >= len(ui.issues) {
 			ui.selectedIssue = len(ui.issues) - 1
-		} else if cy < 0 {
-			v.SetCursor(0, 0)
+		} else if ui.selectedIssue < 0 {
 			ui.selectedIssue = 0
+		}
+
+		// Calculate where cursor should be based on selectedIssue
+		targetCursorY := ui.selectedIssue - oy
+
+		// Only show highlight if selected issue is within the visible viewport
+		if targetCursorY >= 0 && targetCursorY < viewHeight {
+			// Selected issue is visible - position cursor on it and enable highlight
+			v.Highlight = true
+			if cy != targetCursorY {
+				v.SetCursor(0, targetCursorY)
+			}
 		} else {
-			ui.selectedIssue = cy
+			// Selected issue is outside visible area - disable highlight
+			v.Highlight = false
 		}
 	}
 
@@ -724,9 +765,25 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 
 	currentView := g.CurrentView()
+	detailsTitle := "Issue Details"
 	if currentView != nil && currentView.Name() == "details" {
-		dv.Title = "Issue Details [h: back to issues]"
+		detailsTitle = "Issue Details [h: back to issues]"
 	}
+
+	// Add scroll indicator for details
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		_, viewHeight := dv.Size()
+		_, oy := dv.Origin()
+		totalLines := len(dv.BufferLines())
+		if totalLines > viewHeight && totalLines > 0 {
+			scrollPercent := int((float64(oy) / float64(totalLines-viewHeight)) * 100)
+			if scrollPercent > 100 {
+				scrollPercent = 100
+			}
+			detailsTitle = fmt.Sprintf("%s (%d%%)", detailsTitle, scrollPercent)
+		}
+	}
+	dv.Title = detailsTitle
 
 	// Update details content
 	dv.Clear()
@@ -1245,6 +1302,7 @@ func (ui *UI) cursorDown(g *gocui.Gui, v *gocui.View) error {
 		ox, oy := v.Origin()
 
 		if cy+oy+1 < len(ui.issues) {
+			ui.selectedIssue++
 			if err := v.SetCursor(0, cy+1); err != nil {
 				if err := v.SetOrigin(ox, oy+1); err != nil {
 					return err
@@ -1267,18 +1325,18 @@ func (ui *UI) cursorUp(g *gocui.Gui, v *gocui.View) error {
 		ox, oy := v.Origin()
 
 		if cy > 0 {
+			ui.selectedIssue--
 			if err := v.SetCursor(cx, cy-1); err != nil {
 				return err
 			}
-			ui.selectedIssue = cy - 1
 			if dv, err := g.View("details"); err == nil {
 				dv.SetOrigin(0, 0)
 			}
 		} else if oy > 0 {
+			ui.selectedIssue--
 			if err := v.SetOrigin(ox, oy-1); err != nil {
 				return err
 			}
-			ui.selectedIssue = cy - 1
 			if dv, err := g.View("details"); err == nil {
 				dv.SetOrigin(0, 0)
 			}
@@ -2015,8 +2073,10 @@ func (ui *UI) clickIssues(g *gocui.Gui, v *gocui.View) error {
 	}
 	if v != nil {
 		_, cy := v.Cursor()
-		if cy >= 0 && cy < len(ui.issues) {
-			ui.selectedIssue = cy
+		_, oy := v.Origin()
+		selectedIndex := cy + oy
+		if selectedIndex >= 0 && selectedIndex < len(ui.issues) {
+			ui.selectedIssue = selectedIndex
 		}
 	}
 	return nil
@@ -2239,6 +2299,54 @@ func (ui *UI) scrollDetailsUp(g *gocui.Gui, v *gocui.View) error {
 		if oy > 0 {
 			if err := v.SetOrigin(ox, oy-1); err != nil {
 				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (ui *UI) scrollIssuesDown(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && len(ui.issues) > 0 {
+		ox, oy := v.Origin()
+		_, viewHeight := v.Size()
+
+		// Scroll the view down without changing selection
+		if oy+viewHeight < len(ui.issues) {
+			if err := v.SetOrigin(ox, oy+1); err != nil {
+				return nil
+			}
+			// Adjust cursor position to keep pointing at the same selected issue
+			// selectedIssue doesn't change, but cursor needs to move up by 1 to compensate
+			// for the origin moving down by 1
+			if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+				newCursorY := ui.selectedIssue - (oy + 1)
+				if newCursorY >= 0 && newCursorY < viewHeight {
+					v.SetCursor(0, newCursorY)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (ui *UI) scrollIssuesUp(g *gocui.Gui, v *gocui.View) error {
+	if v != nil && len(ui.issues) > 0 {
+		ox, oy := v.Origin()
+		_, viewHeight := v.Size()
+
+		// Scroll the view up without changing selection
+		if oy > 0 {
+			if err := v.SetOrigin(ox, oy-1); err != nil {
+				return err
+			}
+			// Adjust cursor position to keep pointing at the same selected issue
+			// selectedIssue doesn't change, but cursor needs to move down by 1 to compensate
+			// for the origin moving up by 1
+			if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+				newCursorY := ui.selectedIssue - (oy - 1)
+				if newCursorY >= 0 && newCursorY < viewHeight {
+					v.SetCursor(0, newCursorY)
+				}
 			}
 		}
 	}
