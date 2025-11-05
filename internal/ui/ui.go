@@ -498,6 +498,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	triageStateIcon := ""
 	backlogStateIcon := "󱥸"
 	unstartedStateIcon := ""
+	blockedStateIcon := "󰪟"
+	inReviewStateIcon := "󰪣"
 	startedStateIcon := "󰪡"
 	completedStateIcon := ""
 	canceledStateIcon := ""
@@ -646,7 +648,17 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		case "unstarted":
 			stateIcon = unstartedStateIcon
 		case "started":
-			stateIcon = startedStateIcon
+			// Check the actual state name for started states
+			switch issue.State.Name {
+			case "Blocked":
+				stateIcon = blockedStateIcon
+			case "In Progress":
+				stateIcon = startedStateIcon
+			case "In Review":
+				stateIcon = inReviewStateIcon
+			default:
+				stateIcon = startedStateIcon
+			}
 		case "completed":
 			stateIcon = completedStateIcon
 		case "canceled":
@@ -1014,7 +1026,17 @@ func (ui *UI) layout(g *gocui.Gui) error {
 					case "unstarted":
 						stateIcon = unstartedStateIcon
 					case "started":
-						stateIcon = startedStateIcon
+						// Check the actual state name for started states
+						switch state.Name {
+						case "Blocked":
+							stateIcon = blockedStateIcon
+						case "In Progress":
+							stateIcon = startedStateIcon
+						case "In Review":
+							stateIcon = inReviewStateIcon
+						default:
+							stateIcon = startedStateIcon
+						}
 					case "completed":
 						stateIcon = completedStateIcon
 					case "canceled":
