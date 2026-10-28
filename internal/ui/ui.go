@@ -4,13 +4,25 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/benwyrosdick/lazylinear/internal/api"
 	"github.com/charmbracelet/glamour"
 	"github.com/jroimartin/gocui"
+	"github.com/muesli/termenv"
 )
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// navItem is a row in the navigation pane
+type navItem struct {
+	kind  string // "header", "workspace", "view" or "team"
+	index int
+	label string
+}
 
 // UI manages the terminal user interface
 type UI struct {
@@ -19,7 +31,7 @@ type UI struct {
 	issues              []api.Issue
 	allIssues           []api.Issue
 	selectedIssue       int
-	lastRenderedIssue   int
+	lastRenderedID      string
 	renderedDescription string
 	renderedComments    []string
 	showHelp            bool
@@ -27,6 +39,7 @@ type UI struct {
 	searchString        string
 	assignedToMe        bool
 	viewerID            string
+	viewerName          string
 	currentView         int
 	views               []string
 	teams               []api.Team
@@ -59,10 +72,15 @@ type UI struct {
 	createDescription string
 	createActivePane  string
 	mdRenderer        *glamour.TermRenderer
+	mdStyle           string
+	mdWidth           int
 	loading           bool
 	spinnerFrame      int
 	loadingTimer      *time.Timer
 	lastActiveView    string
+	navItems          []navItem
+	navCursor         int
+	lastSynced        time.Time
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -87,6 +105,12 @@ func (e *commentEditor) Edit(v *gocui.View, key gocui.Key, ch rune, mod gocui.Mo
 
 // NewUI creates a new UI instance
 func NewUI(client *api.Client) (*UI, error) {
+	// Detect the terminal background before gocui takes over the terminal
+	mdStyle := "dark"
+	if !termenv.HasDarkBackground() {
+		mdStyle = "light"
+	}
+
 	g, err := gocui.NewGui(gocui.OutputNormal)
 	if err != nil {
 		return nil, err
@@ -103,22 +127,13 @@ func NewUI(client *api.Client) (*UI, error) {
 	g.SelFgColor = gocui.ColorGreen // Active pane border color
 	g.FgColor = gocui.ColorDefault  // Inactive pane border color
 
-	// Create markdown renderer once
-	mdRenderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(80),
-	)
-	if err != nil {
-		mdRenderer = nil
-	}
-
 	ui := &UI{
 		gui:                 g,
 		client:              client,
 		issues:              []api.Issue{},
 		allIssues:           []api.Issue{},
 		selectedIssue:       -1,
-		lastRenderedIssue:   -1,
+		lastRenderedID:      "",
 		renderedDescription: "",
 		renderedComments:    nil,
 		showHelp:            false,
@@ -159,7 +174,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		editActivePane:   "title",
 		showCreate:       false,
 		createActivePane: "title",
-		mdRenderer:       mdRenderer,
+		mdStyle:          mdStyle,
 		loading:          true,
 		spinnerFrame:     0,
 		loadingTimer:     nil,
@@ -417,6 +432,62 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("details", gocui.MouseWheelUp, gocui.ModNone, ui.scrollDetailsUp); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("details", gocui.MouseLeft, gocui.ModNone, ui.clickDetails); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", 'h', gocui.ModNone, ui.focusNav); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("issues", gocui.KeyEnter, gocui.ModNone, ui.focusDetails); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", gocui.KeyArrowDown, gocui.ModNone, ui.navDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", gocui.KeyArrowUp, gocui.ModNone, ui.navUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", 'j', gocui.ModNone, ui.navDown); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", 'k', gocui.ModNone, ui.navUp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", gocui.KeyEnter, gocui.ModNone, ui.navSelect); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", 'l', gocui.ModNone, ui.focusIssues); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", gocui.MouseLeft, gocui.ModNone, ui.clickNav); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", 'r', gocui.ModNone, ui.refreshIssues); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", 'm', gocui.ModNone, ui.toggleAssigned); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", '/', gocui.ModNone, ui.toggleSearch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("nav", '?', gocui.ModNone, ui.toggleHelp); err != nil {
+		return nil, err
+	}
+	for _, pane := range []string{"nav", "issues", "details"} {
+		if err := g.SetKeybinding(pane, gocui.KeyTab, gocui.ModNone, ui.nextPane); err != nil {
+			return nil, err
+		}
+		if err := g.SetKeybinding(pane, '1', gocui.ModNone, ui.focusNav); err != nil {
+			return nil, err
+		}
+		if err := g.SetKeybinding(pane, '2', gocui.ModNone, ui.focusIssues); err != nil {
+			return nil, err
+		}
+		if err := g.SetKeybinding(pane, '3', gocui.ModNone, ui.focusDetails); err != nil {
+			return nil, err
+		}
+	}
 
 	// Start spinner animation
 	ui.startSpinner()
@@ -511,34 +582,59 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// userIcon := ""
 	// stateIcon := "󱇯"
 
-	// Teams bar (top)
-	teamBarHeight := 2
-	if tv, err := g.SetView("teams", 0, 0, maxX-1, teamBarHeight); err != nil {
+	// Pane geometry: navigation | issues | inspector
+	navWidth := maxX * 18 / 100
+	if navWidth < 24 {
+		navWidth = 24
+	} else if navWidth > 34 {
+		navWidth = 34
+	}
+	detailsWidth := maxX * 30 / 100
+	if maxX-navWidth-detailsWidth < 20 {
+		navWidth = maxX / 5
+		detailsWidth = maxX / 4
+	}
+	issuesX0 := navWidth
+	issuesX1 := maxX - detailsWidth - 1
+	detailsX0 := maxX - detailsWidth
+	topY := 1
+	bottomY := maxY - 2
+
+	// Header bar (top)
+	if hv, err := g.SetView("header", 0, -1, maxX-1, 1); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		tv.Frame = true
+		hv.Frame = false
 	}
-	if tv, err := g.View("teams"); err == nil {
-		tv.Clear()
-		if len(ui.teams) > 0 {
-			for i, team := range ui.teams {
-				if i == ui.currentTeam {
-					fmt.Fprintf(tv, "\033[32m%s\033[0m ", "[ "+team.Name+" ]")
-				} else {
-					fmt.Fprintf(tv, "%s ", team.Name)
-				}
-			}
-		} else {
-			fmt.Fprint(tv, "All")
+	if hv, err := g.View("header"); err == nil {
+		hv.Clear()
+		width, _ := hv.Size()
+		left := "\033[1;36mLL\033[0m \033[1mlazylinear\033[0m  \033[90m│  " + ui.breadcrumb() + "\033[0m"
+		right := ""
+		if ui.viewerName != "" {
+			right = "\033[33m" + ui.viewerName + "\033[0m"
 		}
-		tv.Title = "Teams ({/} to switch)"
+		fmt.Fprint(hv, alignLine(left, right, width))
 	}
 
-	// Search bar (if enabled)
+	// Navigation (left side)
+	nv, err := g.SetView("nav", 0, topY, issuesX0-1, bottomY)
+	if err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		nv.SelBgColor = gocui.ColorGreen
+		nv.SelFgColor = gocui.ColorBlack
+	}
+	nv.Title = "1 Navigation"
+
+	// Search bar (bottom of the issues column, if enabled)
+	issuesY1 := bottomY
 	if ui.showSearch {
+		issuesY1 = bottomY - 3
 		title := searchIcon + "Search (Enter: apply, Esc: cancel)"
-		if v, err := g.SetView("search", 0, maxY-4, maxX-1, maxY-2); err != nil {
+		if v, err := g.SetView("search", issuesX0, bottomY-2, issuesX1, bottomY); err != nil {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
@@ -555,13 +651,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.DeleteView("search")
 	}
 
-	// Issues list (left side)
-	issuesX := int(0.4 * float32(maxX))
-	bottomY := maxY - 3
-	if ui.showSearch {
-		bottomY = maxY - 5
-	}
-	v, err := g.SetView("issues", 0, teamBarHeight+1, issuesX, bottomY)
+	// Issues list (middle)
+	v, err := g.SetView("issues", issuesX0, topY, issuesX1, issuesY1)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
@@ -574,13 +665,14 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	v.SelBgColor = gocui.ColorGreen
 	v.SelFgColor = gocui.ColorBlack
 
-	viewTitle := ui.views[ui.currentView]
+	viewTitle := "2 " + ui.views[ui.currentView]
 	if ui.assignedToMe {
 		viewTitle = viewTitle + " (My Issues)"
 	}
 	if ui.searchString != "" {
 		viewTitle = viewTitle + " [" + ui.searchString + "]"
 	}
+	viewTitle = fmt.Sprintf("%s - %d issues", viewTitle, len(ui.issues))
 
 	// Add scroll indicator
 	if len(ui.issues) > 0 {
@@ -759,27 +851,46 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.Cursor = false
 	} else {
 		cv := g.CurrentView()
-		if cv == nil || (cv.Name() != "issues" && cv.Name() != "details") {
+		if cv == nil || (cv.Name() != "nav" && cv.Name() != "issues" && cv.Name() != "details") {
 			g.SetCurrentView("issues")
 		}
 		g.Cursor = false
 	}
 
+	// Update navigation content
+	currentView := g.CurrentView()
+	ui.navItems = ui.buildNavItems()
+	if ui.navCursor >= len(ui.navItems) || ui.navItems[ui.navCursor].kind == "header" {
+		ui.navCursor = ui.nextNavItem(-1, 1)
+	}
+	nv.Clear()
+	navWidthInner, navHeight := nv.Size()
+	for _, item := range ui.navItems {
+		fmt.Fprintln(nv, ui.renderNavItem(item, navWidthInner))
+	}
+	_, navOy := nv.Origin()
+	if ui.navCursor < navOy {
+		navOy = ui.navCursor
+	} else if ui.navCursor >= navOy+navHeight {
+		navOy = ui.navCursor - navHeight + 1
+	}
+	nv.SetOrigin(0, navOy)
+	nv.SetCursor(0, ui.navCursor-navOy)
+	nv.Highlight = currentView != nil && currentView.Name() == "nav"
+
 	// Issue details (right side)
-	dv, err := g.SetView("details", issuesX+1, teamBarHeight+1, maxX-1, bottomY)
+	dv, err := g.SetView("details", detailsX0, topY, maxX-1, bottomY)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		dv.Title = "Issue Details"
 		dv.Wrap = true
 		dv.Autoscroll = false
 	}
 
-	currentView := g.CurrentView()
-	detailsTitle := "Issue Details"
+	detailsTitle := "3 Inspector"
 	if currentView != nil && currentView.Name() == "details" {
-		detailsTitle = "Issue Details [h: back to issues]"
+		detailsTitle = "3 Inspector [h: back to issues]"
 	}
 
 	// Add scroll indicator for details
@@ -802,14 +913,16 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
 
-		// Cache rendered markdown - only re-render if issue changed
-		if ui.selectedIssue != ui.lastRenderedIssue {
+		// Cache rendered markdown - only re-render if issue or pane width changed
+		detailsWidthInner, _ := dv.Size()
+		ui.setMarkdownWidth(detailsWidthInner)
+		if issue.ID != ui.lastRenderedID {
 			ui.renderedDescription = ui.renderMarkdown(issue.Description)
 			ui.renderedComments = make([]string, len(issue.Comments.Nodes))
 			for i, comment := range issue.Comments.Nodes {
 				ui.renderedComments[i] = ui.renderMarkdown(comment.Body)
 			}
-			ui.lastRenderedIssue = ui.selectedIssue
+			ui.lastRenderedID = issue.ID
 		}
 
 		stateColorCode := "37"
@@ -819,46 +932,58 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
+		propertyFmt := "\033[90m%-10s\033[0m %s\n"
 		fmt.Fprintf(dv, "\033[36m%s\033[0m\n", issue.Identifier)
 		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
-		fmt.Fprintf(dv, "\033[35mState:\033[0m \033[%sm%s\033[0m\n", stateColorCode, issue.State.Name)
-		if issue.Priority > 0 {
-			priorityIcon := noPriorityIcon
-			priorityLabel := "No Priority"
-			priorityColor := ""
-			switch int(issue.Priority) {
-			case 1:
-				priorityIcon = urgentPriorityIcon
-				priorityLabel = "Urgent"
-				priorityColor = "\033[31m"
-			case 2:
-				priorityIcon = highPriorityIcon
-				priorityLabel = "High"
-			case 3:
-				priorityIcon = mediumPriorityIcon
-				priorityLabel = "Medium"
-			case 4:
-				priorityIcon = lowPriorityIcon
-				priorityLabel = "Low"
-			}
-			if priorityColor != "" {
-				fmt.Fprintf(dv, "\033[35mPriority:\033[0m %s%s %s\033[0m\n", priorityColor, priorityIcon, priorityLabel)
-			} else {
-				fmt.Fprintf(dv, "\033[35mPriority:\033[0m %s %s\n", priorityIcon, priorityLabel)
+		fmt.Fprintf(dv, propertyFmt, "Status", fmt.Sprintf("\033[%sm%s\033[0m", stateColorCode, issue.State.Name))
+
+		priorityIcon := noPriorityIcon
+		priorityLabel := "No Priority"
+		priorityColor := ""
+		switch int(issue.Priority) {
+		case 1:
+			priorityIcon = urgentPriorityIcon
+			priorityLabel = "Urgent"
+			priorityColor = "\033[31m"
+		case 2:
+			priorityIcon = highPriorityIcon
+			priorityLabel = "High"
+		case 3:
+			priorityIcon = mediumPriorityIcon
+			priorityLabel = "Medium"
+		case 4:
+			priorityIcon = lowPriorityIcon
+			priorityLabel = "Low"
+		}
+		if priorityColor != "" {
+			fmt.Fprintf(dv, propertyFmt, "Priority", fmt.Sprintf("%s%s %s\033[0m", priorityColor, priorityIcon, priorityLabel))
+		} else {
+			fmt.Fprintf(dv, propertyFmt, "Priority", fmt.Sprintf("%s %s", priorityIcon, priorityLabel))
+		}
+
+		teamName := "—"
+		for _, team := range ui.teams {
+			if team.ID == issue.Team.ID {
+				teamName = team.Name
+				break
 			}
 		}
+		fmt.Fprintf(dv, propertyFmt, "Team", teamName)
+
+		assigneeName := "—"
 		if issue.Assignee.Name != "" {
-			fmt.Fprintf(dv, "\033[35mAssignee:\033[0m %s\n", issue.Assignee.Name)
+			assigneeName = issue.Assignee.Name
 		}
+		fmt.Fprintf(dv, propertyFmt, "Assignee", assigneeName)
 		if issue.URL != "" {
-			fmt.Fprintf(dv, "\033[35mURL:\033[0m \033[34m%s\033[0m\n", issue.URL)
+			fmt.Fprintf(dv, propertyFmt, "URL", "\033[34m"+issue.URL+"\033[0m")
 		}
 		if issue.Description != "" {
-			fmt.Fprintf(dv, "\n\033[35mDescription:\033[0m\n")
+			fmt.Fprintf(dv, "\n\033[90mDESCRIPTION\033[0m\n")
 			fmt.Fprintf(dv, "%s\n", ui.renderedDescription)
 		}
 		if len(issue.Comments.Nodes) > 0 {
-			fmt.Fprintf(dv, "\n\033[35mComments:\033[0m\n")
+			fmt.Fprintf(dv, "\n\033[90mCOMMENTS\033[0m\n")
 			for i, comment := range issue.Comments.Nodes {
 				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[90m(%s)\033[0m\n", comment.User.Name, comment.CreatedAt)
 				if i < len(ui.renderedComments) {
@@ -871,14 +996,68 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "Press '?' for help")
 	}
 
+	// Keybindings bar (bottom)
+	if v, err := g.SetView("keybindings", 0, maxY-2, maxX-1, maxY); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		v.Frame = false
+	}
+	if kv, err := g.View("keybindings"); err == nil {
+		kv.Clear()
+
+		var keybindings [][2]string
+		if ui.showSearch {
+			keybindings = [][2]string{{"enter", "apply"}, {"esc", "cancel"}}
+		} else if ui.showComment {
+			keybindings = [][2]string{{"ctrl+s", "submit"}, {"esc", "cancel"}}
+		} else if ui.showStatus || ui.showPriority || ui.showAssignee {
+			keybindings = [][2]string{{"j/k", "move"}, {"enter", "select"}, {"esc", "cancel"}}
+		} else if ui.showEdit {
+			keybindings = [][2]string{{"tab", "switch pane"}, {"ctrl+s", "save"}, {"esc", "cancel"}}
+		} else if ui.showCreate {
+			keybindings = [][2]string{{"tab", "switch pane"}, {"ctrl+s", "create"}, {"esc", "cancel"}}
+		} else if ui.showHelp {
+			keybindings = [][2]string{{"?/esc", "close"}}
+		} else if currentView != nil && currentView.Name() == "nav" {
+			keybindings = [][2]string{{"j/k", "move"}, {"enter", "select"}, {"l", "issues"}, {"m", "my issues"}, {"/", "search"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+		} else if currentView != nil && currentView.Name() == "details" {
+			keybindings = [][2]string{{"j/k", "scroll"}, {"h", "back"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {",", "copy url"}, {".", "copy branch"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+		} else {
+			keybindings = [][2]string{{"j/k", "move"}, {"enter", "inspect"}, {"n", "new"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"/", "search"}, {"m", "my issues"}, {"[/]", "view"}, {"{/}", "team"}, {",", "copy url"}, {".", "copy branch"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+		}
+
+		right := ""
+		if !ui.lastSynced.IsZero() {
+			right = "\033[90msynced " + ui.lastSynced.Format("3:04:05 pm") + "\033[0m"
+		}
+		width, _ := kv.Size()
+		available := width - visibleLen(right) - 2
+
+		var hints []string
+		used := 0
+		for i, kb := range keybindings {
+			hint := kb[0] + " " + kb[1]
+			if used+len([]rune(hint)) > available {
+				if i > 0 {
+					hints = append(hints, "…")
+				}
+				break
+			}
+			hints = append(hints, "\033[33m"+kb[0]+"\033[0m "+kb[1])
+			used += len([]rune(hint)) + 2
+		}
+
+		fmt.Fprint(kv, alignLine(strings.Join(hints, "  "), right, width))
+	}
+
 	// Toast message (if present)
 	if ui.toastMessage != "" {
-		toastHeight := 3
-		toastY := maxY - toastHeight - 2
-		if ui.showSearch {
-			toastY = maxY - toastHeight - 1
+		toastWidth := len([]rune(ui.toastMessage)) + 2
+		if toastWidth > maxX-2 {
+			toastWidth = maxX - 2
 		}
-		if tv, err := g.SetView("toast", 0, toastY, maxX-1, maxY-1); err != nil {
+		if tv, err := g.SetView("toast", maxX-toastWidth-2, bottomY-3, maxX-2, bottomY-1); err != nil {
 			if err != gocui.ErrUnknownView {
 				return err
 			}
@@ -894,55 +1073,14 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.DeleteView("toast")
 	}
 
-	// Keybindings bar (bottom)
-	keybindingsY := maxY - 2
-	if ui.showSearch {
-		keybindingsY = maxY - 1
-	}
-	if ui.toastMessage != "" {
-		keybindingsY -= 3
-	}
-	if v, err := g.SetView("keybindings", 0, keybindingsY, maxX-1, maxY); err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
-		}
-		v.Frame = false
-	}
-	if kv, err := g.View("keybindings"); err == nil {
-		kv.Clear()
-
-		var keybindings string
-		currentView := g.CurrentView()
-		if ui.showSearch {
-			keybindings = "apply: Enter | cancel: Esc"
-		} else if ui.showComment {
-			keybindings = "submit: ctrl+s | cancel: esc"
-		} else if ui.showStatus {
-			keybindings = "navigate: ↑↓/jk | select: enter | cancel: esc"
-		} else if ui.showPriority {
-			keybindings = "navigate: ↑↓/jk | select: enter | cancel: esc"
-		} else if ui.showAssignee {
-			keybindings = "navigate: ↑↓/jk | select: enter | cancel: esc"
-		} else if ui.showEdit {
-			keybindings = "switch pane: tab | save: ctrl+s | cancel: esc"
-		} else if ui.showCreate {
-			keybindings = "switch pane: tab | create: ctrl+s | cancel: esc"
-		} else if ui.showHelp {
-			keybindings = "close: ? / esc"
-		} else if currentView != nil && currentView.Name() == "details" {
-			keybindings = "scroll: ↑↓/jk : back to issues: h | [r]efresh | [e]dit | [s]tatus | [p]riority | [a]ssign | [c]omment | copy url: , | copy branch: . | help: ? | quit: ctrl+c"
-		} else {
-			keybindings = "navigate: ↑↓/jk | views: [ / ] | teams: { / } | [r]efresh | search: / | [m]y issues | [n]ew | [e]dit | [s]tatus | [p]riority | [a]ssign | [c]omment | copy url: , | copy branch: . | help: ? | quit: ctrl+c"
-		}
-
-		fmt.Fprintf(kv, "\033[34m%s\033[0m", keybindings)
-	}
-
 	// Modals (rendered last so they appear on top)
 	// Help modal (if enabled)
 	if ui.showHelp {
 		helpWidth := maxX - 20
-		helpHeight := 20
+		helpHeight := 30
+		if helpHeight > maxY-2 {
+			helpHeight = maxY - 2
+		}
 		helpX := (maxX - helpWidth) / 2
 		helpY := (maxY - helpHeight) / 2
 
@@ -966,6 +1104,10 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  k / ↑   : Move up")
 			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/Triage/In Review/In Progress/Blocked/Todo/Backlog)")
 			fmt.Fprintln(hv, "  { / }   : Switch team")
+			fmt.Fprintln(hv, "  tab     : Cycle panes (navigation / issues / inspector)")
+			fmt.Fprintln(hv, "  1 2 3   : Focus navigation / issues / inspector")
+			fmt.Fprintln(hv, "  h / l   : Move focus left / right")
+			fmt.Fprintln(hv, "  enter   : Select navigation item / inspect issue")
 			fmt.Fprintln(hv, "")
 			fmt.Fprintln(hv, "Actions:")
 			fmt.Fprintln(hv, "  r       : Refresh issues")
@@ -1378,6 +1520,7 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 		}
 		if fetchedIssues, err := ui.client.GetIssues(context.Background(), teamID); err == nil {
 			ui.allIssues = fetchedIssues
+			ui.lastSynced = time.Now()
 			ui.showToast("Issues reloaded successfully")
 		} else {
 			ui.allIssues = []api.Issue{{Title: fmt.Sprintf("Error loading issues: %v", err)}}
@@ -1386,7 +1529,7 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 	}
 	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
-	ui.lastRenderedIssue = -1 // Invalidate markdown cache
+	ui.lastRenderedID = "" // Invalidate markdown cache
 	return nil
 }
 
@@ -1683,17 +1826,11 @@ func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
 	if len(ui.teams) == 0 {
 		return nil
 	}
-	ui.currentTeam--
-	if ui.currentTeam < 0 {
-		ui.currentTeam = len(ui.teams) - 1
+	team := ui.currentTeam - 1
+	if team < 0 {
+		team = len(ui.teams) - 1
 	}
-	ui.availableStatuses = nil
-	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
-		for _, state := range ui.teams[ui.currentTeam].States {
-			ui.availableStatuses = append(ui.availableStatuses, state.Name)
-		}
-	}
-	return ui.refreshIssues(g, v)
+	return ui.setTeam(g, v, team)
 }
 
 func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
@@ -1703,10 +1840,15 @@ func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
 	if len(ui.teams) == 0 {
 		return nil
 	}
-	ui.currentTeam++
-	if ui.currentTeam >= len(ui.teams) {
-		ui.currentTeam = 0
+	team := ui.currentTeam + 1
+	if team >= len(ui.teams) {
+		team = 0
 	}
+	return ui.setTeam(g, v, team)
+}
+
+func (ui *UI) setTeam(g *gocui.Gui, v *gocui.View, team int) error {
+	ui.currentTeam = team
 	ui.availableStatuses = nil
 	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
 		for _, state := range ui.teams[ui.currentTeam].States {
@@ -2022,6 +2164,7 @@ func (ui *UI) submitEdit(g *gocui.Gui, v *gocui.View) error {
 			} else {
 				ui.issues[ui.selectedIssue].Title = newTitle
 				ui.issues[ui.selectedIssue].Description = newDescription
+				ui.lastRenderedID = ""
 				ui.showToast(fmt.Sprintf("Updated %s", issue.Identifier))
 			}
 		}
@@ -2094,6 +2237,7 @@ func (ui *UI) clickIssues(g *gocui.Gui, v *gocui.View) error {
 		return nil
 	}
 	if v != nil {
+		g.SetCurrentView("issues")
 		_, cy := v.Cursor()
 		_, oy := v.Origin()
 		selectedIndex := cy + oy
@@ -2232,6 +2376,7 @@ func (ui *UI) loadData() {
 	var issues []api.Issue
 	var teams []api.Team
 	var viewerID string
+	var viewerName string
 	var apiErr error
 	var fetchedIssues []api.Issue
 
@@ -2246,6 +2391,7 @@ func (ui *UI) loadData() {
 		fetchedIssues, apiErr = ui.client.GetIssues(context.Background(), teamID)
 		if viewer, err := ui.client.GetViewer(context.Background()); err == nil {
 			viewerID = viewer.ID
+			viewerName = viewer.Name
 		}
 	} else {
 		apiErr = fmt.Errorf("no client")
@@ -2270,7 +2416,11 @@ func (ui *UI) loadData() {
 		ui.allIssues = issues
 		ui.teams = teams
 		ui.viewerID = viewerID
+		ui.viewerName = viewerName
 		ui.availableStatuses = availableStatuses
+		if apiErr == nil {
+			ui.lastSynced = time.Now()
+		}
 
 		if ui.loadingTimer != nil {
 			ui.loadingTimer.Stop()
@@ -2373,4 +2523,239 @@ func (ui *UI) scrollIssuesUp(g *gocui.Gui, v *gocui.View) error {
 		}
 	}
 	return nil
+}
+
+func (ui *UI) clickDetails(g *gocui.Gui, v *gocui.View) error {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+		return nil
+	}
+	return ui.focusDetails(g, v)
+}
+
+func (ui *UI) focusNav(g *gocui.Gui, v *gocui.View) error {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.showSearch {
+		return nil
+	}
+	g.SetCurrentView("nav")
+	g.Cursor = false
+	return nil
+}
+
+func (ui *UI) nextPane(g *gocui.Gui, v *gocui.View) error {
+	if v == nil {
+		return nil
+	}
+	switch v.Name() {
+	case "nav":
+		return ui.focusIssues(g, v)
+	case "issues":
+		return ui.focusDetails(g, v)
+	default:
+		return ui.focusNav(g, v)
+	}
+}
+
+// buildNavItems returns the rows shown in the navigation pane
+func (ui *UI) buildNavItems() []navItem {
+	items := []navItem{
+		{kind: "header", label: "◇ WORKSPACE"},
+		{kind: "workspace", index: 0, label: "My issues"},
+		{kind: "workspace", index: 1, label: "All issues"},
+		{kind: "header", label: "◫ VIEWS"},
+	}
+	for i, name := range ui.views {
+		items = append(items, navItem{kind: "view", index: i, label: name})
+	}
+	if len(ui.teams) > 0 {
+		items = append(items, navItem{kind: "header", label: "▦ TEAMS"})
+		for i, team := range ui.teams {
+			items = append(items, navItem{kind: "team", index: i, label: team.Name})
+		}
+	}
+	return items
+}
+
+// renderNavItem formats a navigation row to fit within width columns
+func (ui *UI) renderNavItem(item navItem, width int) string {
+	if item.kind == "header" {
+		return "\033[90m" + truncate(item.label, width) + "\033[0m"
+	}
+
+	active := false
+	count := ""
+	label := item.label
+	prefix := ""
+	switch item.kind {
+	case "workspace":
+		active = ui.assignedToMe == (item.index == 0)
+		count = fmt.Sprint(ui.countIssues("All", item.index == 0))
+	case "view":
+		active = item.index == ui.currentView
+		count = fmt.Sprint(ui.countIssues(ui.views[item.index], ui.assignedToMe))
+	case "team":
+		active = item.index == ui.currentTeam
+		maxKeyLen := 0
+		for _, team := range ui.teams {
+			if len(team.Key) > maxKeyLen {
+				maxKeyLen = len(team.Key)
+			}
+		}
+		prefix = fmt.Sprintf("%-*s ", maxKeyLen, ui.teams[item.index].Key)
+	}
+
+	marker := "  "
+	if active {
+		marker = "\033[36m›\033[0m "
+	}
+
+	labelWidth := width - 2 - len([]rune(prefix)) - len(count) - 1
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
+	label = truncate(label, labelWidth)
+	padding := strings.Repeat(" ", labelWidth-len([]rune(label)))
+	if active {
+		label = "\033[1m" + label + "\033[0m"
+	}
+	if prefix != "" {
+		prefix = "\033[36m" + prefix + "\033[0m"
+	}
+	return marker + prefix + label + padding + " \033[90m" + count + "\033[0m"
+}
+
+// countIssues counts loaded issues in the given state ("All" matches any state)
+func (ui *UI) countIssues(stateName string, mineOnly bool) int {
+	count := 0
+	for _, issue := range ui.allIssues {
+		if mineOnly && issue.Assignee.ID != ui.viewerID {
+			continue
+		}
+		if stateName != "All" && issue.State.Name != stateName {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// nextNavItem returns the index of the next selectable nav item from start in direction dir
+func (ui *UI) nextNavItem(start int, dir int) int {
+	for i := start + dir; i >= 0 && i < len(ui.navItems); i += dir {
+		if ui.navItems[i].kind != "header" {
+			return i
+		}
+	}
+	if start < 0 {
+		return 0
+	}
+	return start
+}
+
+func (ui *UI) navDown(g *gocui.Gui, v *gocui.View) error {
+	ui.navCursor = ui.nextNavItem(ui.navCursor, 1)
+	return nil
+}
+
+func (ui *UI) navUp(g *gocui.Gui, v *gocui.View) error {
+	ui.navCursor = ui.nextNavItem(ui.navCursor, -1)
+	return nil
+}
+
+func (ui *UI) navSelect(g *gocui.Gui, v *gocui.View) error {
+	if ui.navCursor < 0 || ui.navCursor >= len(ui.navItems) {
+		return nil
+	}
+	item := ui.navItems[ui.navCursor]
+	switch item.kind {
+	case "workspace":
+		ui.assignedToMe = item.index == 0
+	case "view":
+		ui.currentView = item.index
+	case "team":
+		if item.index != ui.currentTeam {
+			return ui.setTeam(g, v, item.index)
+		}
+		return nil
+	default:
+		return nil
+	}
+	ui.issues = ui.filterIssues()
+	ui.selectedIssue = -1
+	return nil
+}
+
+func (ui *UI) clickNav(g *gocui.Gui, v *gocui.View) error {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+		return nil
+	}
+	g.SetCurrentView("nav")
+	_, cy := v.Cursor()
+	_, oy := v.Origin()
+	index := cy + oy
+	if index < 0 || index >= len(ui.navItems) || ui.navItems[index].kind == "header" {
+		return nil
+	}
+	ui.navCursor = index
+	return ui.navSelect(g, v)
+}
+
+// setMarkdownWidth rebuilds the markdown renderer when the inspector width changes
+func (ui *UI) setMarkdownWidth(width int) {
+	if ui.mdRenderer != nil && ui.mdWidth == width {
+		return
+	}
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle(ui.mdStyle),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return
+	}
+	ui.mdRenderer = renderer
+	ui.mdWidth = width
+	ui.lastRenderedID = ""
+}
+
+// breadcrumb describes the current team and filters for the header
+func (ui *UI) breadcrumb() string {
+	parts := []string{"All teams"}
+	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
+		parts[0] = ui.teams[ui.currentTeam].Name
+	}
+	if ui.assignedToMe {
+		parts = append(parts, "My issues")
+	} else {
+		parts = append(parts, "All issues")
+	}
+	if ui.views[ui.currentView] != "All" {
+		parts = append(parts, ui.views[ui.currentView])
+	}
+	if ui.searchString != "" {
+		parts = append(parts, "\""+ui.searchString+"\"")
+	}
+	return strings.Join(parts, " / ")
+}
+
+// alignLine places left and right on one line of the given width
+func alignLine(left, right string, width int) string {
+	gap := width - visibleLen(left) - visibleLen(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func visibleLen(s string) int {
+	return utf8.RuneCountInString(ansiPattern.ReplaceAllString(s, ""))
+}
+
+func truncate(s string, width int) string {
+	runes := []rune(s)
+	if len(runes) <= width {
+		return s
+	}
+	if width <= 1 {
+		return "…"
+	}
+	return string(runes[:width-1]) + "…"
 }
