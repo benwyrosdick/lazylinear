@@ -1,0 +1,19 @@
+internal/ui/ui.go
+  s_aaaad71025521a::t_88fd6727119a68 18,88-91,512-529,631-651,662-680,1197,1228,3065-3104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d5865c6fcbe288e5a3e4e317621edefdc5beda00",
+  "prompts": {},
+  "sessions": {
+    "s_aaaad71025521a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97e09551-7d3b-440f-aa43-4804bd954f8f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Ben Wyrosdick <ben.wyrosdick@gmail.com>"
+    }
+  }
+}
