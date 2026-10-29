@@ -239,6 +239,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", 'y', gocui.ModNone, ui.copyDescription); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", 'o', gocui.ModNone, ui.openInBrowser); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("issues", 'a', gocui.ModNone, ui.toggleAssignee); err != nil {
 		return nil, err
 	}
@@ -417,6 +420,9 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", 'y', gocui.ModNone, ui.copyDescription); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'o', gocui.ModNone, ui.openInBrowser); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", 'a', gocui.ModNone, ui.toggleAssignee); err != nil {
@@ -1139,9 +1145,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		} else if currentView != nil && currentView.Name() == "nav" {
 			keybindings = [][2]string{{"j/k", "move"}, {"enter", "select"}, {"l", "issues"}, {"m", "my issues"}, {"/", "search"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		} else if currentView != nil && currentView.Name() == "details" {
-			keybindings = [][2]string{{"j/k", "scroll"}, {"h", "back"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"y", "copy description"}, {",", "copy url"}, {".", "copy branch"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+			keybindings = [][2]string{{"j/k", "scroll"}, {"h", "back"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"o", "open"}, {"y", "copy description"}, {",", "copy url"}, {".", "copy branch"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		} else {
-			keybindings = [][2]string{{"j/k", "move"}, {"enter", "inspect"}, {"n", "new"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"/", "search"}, {"m", "my issues"}, {"[/]", "view"}, {"{/}", "team"}, {"y", "copy description"}, {",", "copy url"}, {".", "copy branch"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+			keybindings = [][2]string{{"j/k", "move"}, {"enter", "inspect"}, {"n", "new"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"/", "search"}, {"m", "my issues"}, {"[/]", "view"}, {"{/}", "team"}, {"o", "open"}, {"y", "copy description"}, {",", "copy url"}, {".", "copy branch"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		}
 
 		right := ""
@@ -1194,7 +1200,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// Help modal (if enabled)
 	if ui.showHelp {
 		helpWidth := maxX - 20
-		helpHeight := 33
+		helpHeight := 34
 		if helpHeight > maxY-2 {
 			helpHeight = maxY - 2
 		}
@@ -1240,6 +1246,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
 			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
 			fmt.Fprintln(hv, "  y       : Copy issue description (markdown) to clipboard")
+			fmt.Fprintln(hv, "  o       : Open issue in Linear in your browser")
 			fmt.Fprintln(hv, "  ?       : Toggle this help")
 			fmt.Fprintln(hv, "  Ctrl+C  : Quit")
 			fmt.Fprintln(hv, "")
@@ -1995,6 +2002,36 @@ func (ui *UI) copyURL(g *gocui.Gui, v *gocui.View) error {
 			return ui.copyToClipboard(issue.URL, "Issue URL")
 		}
 	}
+	return nil
+}
+
+func (ui *UI) openInBrowser(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue < 0 || ui.selectedIssue >= len(ui.issues) {
+		return nil
+	}
+	issue := ui.issues[ui.selectedIssue]
+	if issue.URL == "" {
+		ui.showToast("Issue has no URL")
+		return nil
+	}
+
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("xdg-open"); err == nil {
+		cmd = exec.Command("xdg-open", issue.URL)
+	} else if _, err := exec.LookPath("open"); err == nil {
+		cmd = exec.Command("open", issue.URL)
+	} else {
+		ui.showToast("No browser opener found (xdg-open or open)")
+		return nil
+	}
+
+	if err := cmd.Start(); err != nil {
+		ui.showToast(fmt.Sprintf("Failed to open browser: %v", err))
+		return nil
+	}
+	go cmd.Wait()
+
+	ui.showToast(fmt.Sprintf("Opened %s in browser", issue.Identifier))
 	return nil
 }
 
