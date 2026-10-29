@@ -231,6 +231,9 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", '.', gocui.ModNone, ui.copyBranch); err != nil {
 		return nil, err
 	}
+	if err := g.SetKeybinding("issues", 'y', gocui.ModNone, ui.copyDescription); err != nil {
+		return nil, err
+	}
 	if err := g.SetKeybinding("issues", 'a', gocui.ModNone, ui.toggleAssignee); err != nil {
 		return nil, err
 	}
@@ -406,6 +409,9 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", '.', gocui.ModNone, ui.copyBranch); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("details", 'y', gocui.ModNone, ui.copyDescription); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("details", 'a', gocui.ModNone, ui.toggleAssignee); err != nil {
@@ -1070,9 +1076,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		} else if currentView != nil && currentView.Name() == "nav" {
 			keybindings = [][2]string{{"j/k", "move"}, {"enter", "select"}, {"l", "issues"}, {"m", "my issues"}, {"/", "search"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		} else if currentView != nil && currentView.Name() == "details" {
-			keybindings = [][2]string{{"j/k", "scroll"}, {"h", "back"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {",", "copy url"}, {".", "copy branch"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+			keybindings = [][2]string{{"j/k", "scroll"}, {"h", "back"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"y", "copy description"}, {",", "copy url"}, {".", "copy branch"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		} else {
-			keybindings = [][2]string{{"j/k", "move"}, {"enter", "inspect"}, {"n", "new"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"/", "search"}, {"m", "my issues"}, {"[/]", "view"}, {"{/}", "team"}, {",", "copy url"}, {".", "copy branch"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
+			keybindings = [][2]string{{"j/k", "move"}, {"enter", "inspect"}, {"n", "new"}, {"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"a", "assign"}, {"c", "comment"}, {"/", "search"}, {"m", "my issues"}, {"[/]", "view"}, {"{/}", "team"}, {"y", "copy description"}, {",", "copy url"}, {".", "copy branch"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		}
 
 		right := ""
@@ -1125,7 +1131,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// Help modal (if enabled)
 	if ui.showHelp {
 		helpWidth := maxX - 20
-		helpHeight := 30
+		helpHeight := 32
 		if helpHeight > maxY-2 {
 			helpHeight = maxY - 2
 		}
@@ -1169,6 +1175,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  a       : Assign user to selected issue")
 			fmt.Fprintln(hv, "  ,       : Copy issue URL to clipboard")
 			fmt.Fprintln(hv, "  .       : Copy git branch name to clipboard")
+			fmt.Fprintln(hv, "  y       : Copy issue description (markdown) to clipboard")
 			fmt.Fprintln(hv, "  ?       : Toggle this help")
 			fmt.Fprintln(hv, "  Ctrl+C  : Quit")
 			fmt.Fprintln(hv, "")
@@ -1923,6 +1930,18 @@ func (ui *UI) copyURL(g *gocui.Gui, v *gocui.View) error {
 		if issue.URL != "" {
 			return ui.copyToClipboard(issue.URL, "Issue URL")
 		}
+	}
+	return nil
+}
+
+func (ui *UI) copyDescription(g *gocui.Gui, v *gocui.View) error {
+	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
+		issue := ui.issues[ui.selectedIssue]
+		if issue.Description == "" {
+			ui.showToast("No description to copy")
+			return nil
+		}
+		return ui.copyToClipboard(issue.Description, "Description")
 	}
 	return nil
 }
