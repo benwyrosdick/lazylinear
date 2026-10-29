@@ -48,6 +48,7 @@ type UI struct {
 	viewerName          string
 	currentView         int
 	views               []string
+	closedLoaded        bool
 	teams               []api.Team
 	currentTeam         int
 	showComment         bool
@@ -156,7 +157,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		assignedToMe:        false,
 		viewerID:            "",
 		currentView:         0,
-		views:               []string{"All", "Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
+		views:               []string{"Open", "All", "Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"},
 		teams:               []api.Team{},
 		currentTeam:         0,
 		showComment:         false,
@@ -752,7 +753,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	viewTitle := "2 " + ui.views[ui.currentView]
 	if view := ui.customView(ui.currentCustomView); view != nil {
 		viewTitle = "2 " + view.Name
-		if ui.views[ui.currentView] != "All" {
+		if ui.views[ui.currentView] != "Open" {
 			viewTitle = viewTitle + " / " + ui.views[ui.currentView]
 		}
 	}
@@ -1225,7 +1226,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "Navigation:")
 			fmt.Fprintln(hv, "  j / ↓   : Move down")
 			fmt.Fprintln(hv, "  k / ↑   : Move up")
-			fmt.Fprintln(hv, "  [ / ]   : Switch view (All/Triage/In Review/In Progress/Blocked/Todo/Backlog)")
+			fmt.Fprintln(hv, "  [ / ]   : Switch status (Open/All/Triage/In Review/.../Backlog)")
 			fmt.Fprintln(hv, "  { / }   : Switch team")
 			fmt.Fprintln(hv, "  tab     : Cycle panes (navigation / issues / inspector)")
 			fmt.Fprintln(hv, "  1 2 3   : Focus navigation / issues / inspector")
@@ -1649,10 +1650,11 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 		if ui.currentCustomView != "" && teamID != "" {
 			fetchedIssues, err = ui.client.GetCustomViewIssues(context.Background(), ui.currentCustomView, teamID)
 		} else {
-			fetchedIssues, err = ui.client.GetIssues(context.Background(), teamID)
+			fetchedIssues, err = ui.client.GetIssues(context.Background(), teamID, ui.showClosed())
 		}
 		if err == nil {
 			ui.allIssues = fetchedIssues
+			ui.closedLoaded = ui.currentCustomView != "" || ui.showClosed()
 			ui.lastSynced = time.Now()
 			ui.showToast("Issues reloaded successfully")
 		} else {
@@ -1930,26 +1932,46 @@ func (ui *UI) prevView(g *gocui.Gui, v *gocui.View) error {
 	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
-	ui.currentView--
-	if ui.currentView < 0 {
-		ui.currentView = len(ui.views) - 1
+	view := ui.currentView - 1
+	if view < 0 {
+		view = len(ui.views) - 1
 	}
-	ui.issues = ui.filterIssues()
-	ui.selectedIssue = -1
-	return nil
+	return ui.setStatusView(g, v, view)
 }
 
 func (ui *UI) nextView(g *gocui.Gui, v *gocui.View) error {
 	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
 		return nil
 	}
-	ui.currentView++
-	if ui.currentView >= len(ui.views) {
-		ui.currentView = 0
+	view := ui.currentView + 1
+	if view >= len(ui.views) {
+		view = 0
+	}
+	return ui.setStatusView(g, v, view)
+}
+
+// setStatusView switches the status filter, fetching closed issues the first time "All" needs them
+func (ui *UI) setStatusView(g *gocui.Gui, v *gocui.View, view int) error {
+	ui.currentView = view
+	if ui.showClosed() && !ui.closedLoaded {
+		return ui.refreshIssues(g, v)
 	}
 	ui.issues = ui.filterIssues()
 	ui.selectedIssue = -1
 	return nil
+}
+
+// showClosed reports whether the status filter includes completed and canceled issues
+func (ui *UI) showClosed() bool {
+	return ui.views[ui.currentView] == "All"
+}
+
+// scopeStatus is the status filter applied to the workspace and project counts
+func (ui *UI) scopeStatus() string {
+	if ui.showClosed() {
+		return "All"
+	}
+	return "Open"
 }
 
 func (ui *UI) prevTeam(g *gocui.Gui, v *gocui.View) error {
@@ -2172,7 +2194,7 @@ func (ui *UI) filterIssues() []api.Issue {
 		if ui.assignedToMe && issue.Assignee.ID != ui.viewerID {
 			continue
 		}
-		if currentViewName != "All" && issue.State.Name != currentViewName {
+		if !stateMatches(issue, currentViewName) {
 			continue
 		}
 		if ui.projectFilter != "" && issue.Project.ID != ui.projectFilter {
@@ -2591,7 +2613,7 @@ func (ui *UI) loadData() {
 		if len(teams) > 0 {
 			teamID = teams[0].ID
 		}
-		fetchedIssues, apiErr = ui.client.GetIssues(ctx, teamID)
+		fetchedIssues, apiErr = ui.client.GetIssues(ctx, teamID, false)
 		wg.Wait()
 	} else {
 		apiErr = fmt.Errorf("no client")
@@ -2819,15 +2841,17 @@ func (ui *UI) renderNavItem(item navItem, width int) string {
 	switch item.kind {
 	case "workspace":
 		active = ui.assignedToMe == (item.index == 0) && ui.currentCustomView == "" && ui.projectFilter == ""
-		count = fmt.Sprint(ui.countIssues("All", item.index == 0, ""))
+		count = fmt.Sprint(ui.countIssues(ui.scopeStatus(), item.index == 0, ""))
 	case "view":
 		active = item.index == ui.currentView
-		count = fmt.Sprint(ui.countIssues(ui.views[item.index], ui.assignedToMe, ui.projectFilter))
+		if ui.views[item.index] != "All" || ui.closedLoaded {
+			count = fmt.Sprint(ui.countIssues(ui.views[item.index], ui.assignedToMe, ui.projectFilter))
+		}
 	case "customView":
 		active = item.id == ui.currentCustomView
 	case "project":
 		active = item.id == ui.projectFilter
-		count = fmt.Sprint(ui.countIssues("All", ui.assignedToMe, item.id))
+		count = fmt.Sprint(ui.countIssues(ui.scopeStatus(), ui.assignedToMe, item.id))
 	case "team":
 		active = item.index == ui.currentTeam
 		maxKeyLen := 0
@@ -2868,14 +2892,14 @@ func (ui *UI) renderNavItem(item navItem, width int) string {
 	return marker + prefix + label + padding + " \033[38;5;245m" + count + "\033[0m"
 }
 
-// countIssues counts loaded issues in the given state ("All" matches any state) and project ("" matches any)
+// countIssues counts loaded issues matching a status filter (see stateMatches) and project ("" matches any)
 func (ui *UI) countIssues(stateName string, mineOnly bool, projectID string) int {
 	count := 0
 	for _, issue := range ui.allIssues {
 		if mineOnly && issue.Assignee.ID != ui.viewerID {
 			continue
 		}
-		if stateName != "All" && issue.State.Name != stateName {
+		if !stateMatches(issue, stateName) {
 			continue
 		}
 		if projectID != "" && issue.Project.ID != projectID {
@@ -2884,6 +2908,19 @@ func (ui *UI) countIssues(stateName string, mineOnly bool, projectID string) int
 		count++
 	}
 	return count
+}
+
+// stateMatches reports whether an issue passes a status filter: "All" matches every issue,
+// "Open" anything not completed or canceled, and any other value the state with that name
+func stateMatches(issue api.Issue, status string) bool {
+	switch status {
+	case "All":
+		return true
+	case "Open":
+		return issue.State.Type != "completed" && issue.State.Type != "canceled"
+	default:
+		return issue.State.Name == status
+	}
 }
 
 // customView returns the loaded saved view with the given ID, or nil
@@ -2954,7 +2991,7 @@ func (ui *UI) navSelect(g *gocui.Gui, v *gocui.View) error {
 			return ui.refreshIssues(g, v)
 		}
 	case "view":
-		ui.currentView = item.index
+		return ui.setStatusView(g, v, item.index)
 	case "customView":
 		if item.id != ui.currentCustomView {
 			ui.currentCustomView = item.id
@@ -3029,7 +3066,7 @@ func (ui *UI) breadcrumb() string {
 	if ui.projectFilter != "" {
 		parts = append(parts, ui.projectName(ui.projectFilter))
 	}
-	if ui.views[ui.currentView] != "All" {
+	if ui.views[ui.currentView] != "Open" {
 		parts = append(parts, ui.views[ui.currentView])
 	}
 	if ui.searchString != "" {

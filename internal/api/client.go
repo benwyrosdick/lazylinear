@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"github.com/machinebox/graphql"
 )
@@ -124,6 +125,9 @@ const issueFields = `
 
 // maxIssuePages caps how many pages of issues are fetched per request
 const maxIssuePages = 20
+
+// openStateFilter matches issues that are not completed or canceled
+const openStateFilter = `state: { type: { nin: ["completed", "canceled"] } }`
 
 // pageInfo holds GraphQL connection pagination state
 type pageInfo struct {
@@ -286,47 +290,29 @@ func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
 	return teams, nil
 }
 
-// GetIssues fetches issues from Linear filtered by specified states
-func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) {
-	var query string
+// GetIssues fetches a team's issues from Linear (all teams when teamID is empty).
+// Completed and canceled issues are only included when includeClosed is true.
+func (c *Client) GetIssues(ctx context.Context, teamID string, includeClosed bool) ([]Issue, error) {
+	var filters []string
+	params := "$after: String"
 	if teamID != "" {
-		query = `
-		query($teamID: ID!, $after: String) {
-			issues(first: 50, after: $after, filter: {
-				team: { id: { eq: $teamID } }
-				state: {
-					name: {
-						in: ["Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"]
-					}
-				}
-			}) {
-				nodes {` + issueFields + `}
-				pageInfo {
-					hasNextPage
-					endCursor
-				}
-			}
-		}
-		`
-	} else {
-		query = `
-		query($after: String) {
-			issues(first: 50, after: $after, filter: {
-				state: {
-					name: {
-						in: ["In Review", "In Progress", "Blocked", "Todo", "Backlog"]
-					}
-				}
-			}) {
-				nodes {` + issueFields + `}
-				pageInfo {
-					hasNextPage
-					endCursor
-				}
-			}
-		}
-		`
+		filters = append(filters, "team: { id: { eq: $teamID } }")
+		params = "$teamID: ID!, " + params
 	}
+	if !includeClosed {
+		filters = append(filters, openStateFilter)
+	}
+	query := `
+		query(` + params + `) {
+			issues(first: 50, after: $after, orderBy: updatedAt, filter: {` + strings.Join(filters, "\n") + `}) {
+				nodes {` + issueFields + `}
+				pageInfo {
+					hasNextPage
+					endCursor
+				}
+			}
+		}
+	`
 
 	var issues []Issue
 	var after *string
@@ -464,13 +450,7 @@ func (c *Client) GetCustomViews(ctx context.Context) ([]CustomView, error) {
 func (c *Client) GetTeamIssueCounts(ctx context.Context) (map[string]int, error) {
 	query := `
 		query($after: String) {
-			issues(first: 250, after: $after, filter: {
-				state: {
-					name: {
-						in: ["Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"]
-					}
-				}
-			}) {
+			issues(first: 250, after: $after, filter: {` + openStateFilter + `}) {
 				nodes {
 					team {
 						id
@@ -523,6 +503,14 @@ func (c *Client) GetTeamIssueCounts(ctx context.Context) (map[string]int, error)
 }
 
 func sortIssuesByState(issues []Issue) {
+	typeOrder := map[string]int{
+		"triage":    0,
+		"backlog":   1,
+		"unstarted": 2,
+		"started":   3,
+		"completed": 4,
+		"canceled":  5,
+	}
 	stateOrder := map[string]int{
 		"In Review":   0,
 		"In Progress": 1,
@@ -535,11 +523,12 @@ func sortIssuesByState(issues []Issue) {
 		orderI, okI := stateOrder[issues[i].State.Name]
 		orderJ, okJ := stateOrder[issues[j].State.Name]
 
+		// Other states (triage, custom ones, then completed and canceled) follow by type
 		if !okI {
-			orderI = 999
+			orderI = 100 + typeOrder[issues[i].State.Type]
 		}
 		if !okJ {
-			orderJ = 999
+			orderJ = 100 + typeOrder[issues[j].State.Type]
 		}
 
 		return orderI < orderJ
