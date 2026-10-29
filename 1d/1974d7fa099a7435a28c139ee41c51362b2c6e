@@ -1,0 +1,24 @@
+internal/ui/ui.go
+  s_aaaad71025521a::t_65b9b3135d7f01 51,160,756,1653,1657,1935-1937,1939,1946-1957,1964-1976,2197,2616,2844,2847-2849,2854,2895,2902,2913-2925,2994,3069
+  s_aaaad71025521a::t_cf6f0bd0a46651 1229
+internal/api/client.go
+  s_aaaad71025521a::t_f2337b12bdf226 6,129-130
+  s_aaaad71025521a::t_a3c41b80c1767f 293-297,299-307,315,453,506-513,526,528,531
+  s_aaaad71025521a::t_acbc3356c30248 131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d1974d7fa099a7435a28c139ee41c51362b2c6e",
+  "prompts": {},
+  "sessions": {
+    "s_aaaad71025521a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97e09551-7d3b-440f-aa43-4804bd954f8f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Ben Wyrosdick <ben.wyrosdick@gmail.com>"
+    }
+  }
+}
