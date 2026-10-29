@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/jroimartin/gocui"
 	"github.com/muesli/termenv"
+	"github.com/nsf/termbox-go"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -84,6 +85,10 @@ type UI struct {
 	loadingTimer      *time.Timer
 	lastActiveView    string
 	navItems          []navItem
+	navWidth          int
+	detailsWidth      int
+	resizing          string
+	resizeOffset      int
 	navCursor         int
 	lastSynced        time.Time
 	customViews       []api.CustomView
@@ -504,6 +509,24 @@ func NewUI(client *api.Client) (*UI, error) {
 		}
 	}
 
+	// Pane resizing: any press or release ends a drag, a press on a gutter
+	// starts one, and motion with the button held moves the gutter
+	if err := g.SetKeybinding("", gocui.MouseLeft, gocui.ModNone, ui.endResize); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("", gocui.MouseRelease, gocui.ModNone, ui.endResize); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("gutter_nav", gocui.MouseLeft, gocui.ModNone, ui.startResize); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("gutter_details", gocui.MouseLeft, gocui.ModNone, ui.startResize); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("", gocui.MouseLeft, gocui.Modifier(termbox.ModMotion), ui.dragResize); err != nil {
+		return nil, err
+	}
+
 	// Start spinner animation
 	ui.startSpinner()
 
@@ -605,6 +628,27 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		navWidth = 34
 	}
 	detailsWidth := maxX * 30 / 100
+
+	// Widths dragged by the user take precedence, keeping every pane usable
+	minNavWidth, minIssuesWidth, minDetailsWidth := 12, 20, 20
+	if ui.navWidth > 0 {
+		navWidth = ui.navWidth
+	}
+	if ui.detailsWidth > 0 {
+		detailsWidth = ui.detailsWidth
+	}
+	if navWidth > maxX-detailsWidth-minIssuesWidth {
+		navWidth = maxX - detailsWidth - minIssuesWidth
+	}
+	if navWidth < minNavWidth {
+		navWidth = minNavWidth
+	}
+	if detailsWidth > maxX-navWidth-minIssuesWidth {
+		detailsWidth = maxX - navWidth - minIssuesWidth
+	}
+	if detailsWidth < minDetailsWidth {
+		detailsWidth = minDetailsWidth
+	}
 	if maxX-navWidth-detailsWidth < 20 {
 		navWidth = maxX / 5
 		detailsWidth = maxX / 4
@@ -614,6 +658,25 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	detailsX0 := maxX - detailsWidth
 	topY := 1
 	bottomY := maxY - 2
+
+	// Gutters sit beneath the panes so the pane frames draw over them, but
+	// clicks on the border columns (outside every pane's interior) land here
+	gutters := []struct {
+		name string
+		x    int
+	}{
+		{"gutter_nav", issuesX0 - 1},
+		{"gutter_details", issuesX1},
+	}
+	for _, gutter := range gutters {
+		if gv, err := g.SetView(gutter.name, gutter.x-1, topY-1, gutter.x+2, bottomY+1); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			gv.Frame = false
+			g.SetViewOnBottom(gutter.name)
+		}
+	}
 
 	// Header bar (top)
 	if hv, err := g.SetView("header", 0, -1, maxX-1, 1); err != nil {
@@ -1131,7 +1194,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// Help modal (if enabled)
 	if ui.showHelp {
 		helpWidth := maxX - 20
-		helpHeight := 32
+		helpHeight := 33
 		if helpHeight > maxY-2 {
 			helpHeight = maxY - 2
 		}
@@ -1162,6 +1225,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  1 2 3   : Focus navigation / issues / inspector")
 			fmt.Fprintln(hv, "  h / l   : Move focus left / right")
 			fmt.Fprintln(hv, "  enter   : Select navigation item / inspect issue")
+			fmt.Fprintln(hv, "  drag    : Drag the lines between panes to resize them")
 			fmt.Fprintln(hv, "")
 			fmt.Fprintln(hv, "Actions:")
 			fmt.Fprintln(hv, "  r       : Refresh issues")
@@ -2997,4 +3061,44 @@ func hexTo256(hex string) string {
 		return (c - 35) / 40
 	}
 	return fmt.Sprintf("38;5;%d", 16+36*toCube(r)+6*toCube(g)+toCube(b))
+}
+
+func (ui *UI) startResize(g *gocui.Gui, v *gocui.View) error {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp {
+		return nil
+	}
+	// The gutter covers two border columns; remember which one was grabbed
+	ui.resizing = v.Name()
+	ui.resizeOffset, _ = v.Cursor()
+	return nil
+}
+
+func (ui *UI) dragResize(g *gocui.Gui, v *gocui.View) error {
+	if ui.resizing == "" || v == nil {
+		return nil
+	}
+	maxX, _ := g.Size()
+	x := mouseX(g, v) - ui.resizeOffset
+	switch ui.resizing {
+	case "gutter_nav":
+		ui.navWidth = x + 1
+	case "gutter_details":
+		ui.detailsWidth = maxX - x - 1
+	}
+	return nil
+}
+
+func (ui *UI) endResize(g *gocui.Gui, v *gocui.View) error {
+	ui.resizing = ""
+	return nil
+}
+
+// mouseX returns the screen column of the mouse event delivered to v
+func mouseX(g *gocui.Gui, v *gocui.View) int {
+	x0, _, _, _, err := g.ViewPosition(v.Name())
+	if err != nil {
+		return 0
+	}
+	cx, _ := v.Cursor()
+	return x0 + 1 + cx
 }
