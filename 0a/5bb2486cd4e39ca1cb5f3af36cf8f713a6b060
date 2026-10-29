@@ -1,0 +1,21 @@
+internal/ui/ui.go
+  s_aaaad71025521a::t_796314cde391e8 234-236,414-416,1079,1081,1178,1937-1945
+  s_aaaad71025521a::t_ba9026f1d87ee7 1134
+  s_aaaad71025521a::t_4807bb2d2d81fb 1946-1948
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a5bb2486cd4e39ca1cb5f3af36cf8f713a6b060",
+  "prompts": {},
+  "sessions": {
+    "s_aaaad71025521a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97e09551-7d3b-440f-aa43-4804bd954f8f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Ben Wyrosdick <ben.wyrosdick@gmail.com>"
+    }
+  }
+}
