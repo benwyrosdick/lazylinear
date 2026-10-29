@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -19,9 +21,11 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // navItem is a row in the navigation pane
 type navItem struct {
-	kind  string // "header", "workspace", "view" or "team"
+	kind  string // "header", "workspace", "view", "customView", "team" or "project"
 	index int
+	id    string
 	label string
+	color string
 }
 
 // UI manages the terminal user interface
@@ -32,6 +36,7 @@ type UI struct {
 	allIssues           []api.Issue
 	selectedIssue       int
 	lastRenderedID      string
+	inspectedID         string
 	renderedDescription string
 	renderedComments    []string
 	showHelp            bool
@@ -81,6 +86,10 @@ type UI struct {
 	navItems          []navItem
 	navCursor         int
 	lastSynced        time.Time
+	customViews       []api.CustomView
+	currentCustomView string
+	projectFilter     string
+	teamIssueCounts   map[string]int
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -111,7 +120,7 @@ func NewUI(client *api.Client) (*UI, error) {
 		mdStyle = "light"
 	}
 
-	g, err := gocui.NewGui(gocui.OutputNormal)
+	g, err := gocui.NewGui(gocui.Output256)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +207,7 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("issues", 'k', gocui.ModNone, ui.cursorUp); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("issues", 'r', gocui.ModNone, ui.refreshIssues); err != nil {
+	if err := g.SetKeybinding("issues", 'r', gocui.ModNone, ui.reload); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("issues", '?', gocui.ModNone, ui.toggleHelp); err != nil {
@@ -462,7 +471,7 @@ func NewUI(client *api.Client) (*UI, error) {
 	if err := g.SetKeybinding("nav", gocui.MouseLeft, gocui.ModNone, ui.clickNav); err != nil {
 		return nil, err
 	}
-	if err := g.SetKeybinding("nav", 'r', gocui.ModNone, ui.refreshIssues); err != nil {
+	if err := g.SetKeybinding("nav", 'r', gocui.ModNone, ui.reload); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("nav", 'm', gocui.ModNone, ui.toggleAssigned); err != nil {
@@ -610,7 +619,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if hv, err := g.View("header"); err == nil {
 		hv.Clear()
 		width, _ := hv.Size()
-		left := "\033[1;36mLL\033[0m \033[1mlazylinear\033[0m  \033[90m│  " + ui.breadcrumb() + "\033[0m"
+		left := "\033[1;36mLL\033[0m \033[1mlazylinear\033[0m  \033[38;5;245m│  " + ui.breadcrumb() + "\033[0m"
 		right := ""
 		if ui.viewerName != "" {
 			right = "\033[33m" + ui.viewerName + "\033[0m"
@@ -666,6 +675,15 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	v.SelFgColor = gocui.ColorBlack
 
 	viewTitle := "2 " + ui.views[ui.currentView]
+	if view := ui.customView(ui.currentCustomView); view != nil {
+		viewTitle = "2 " + view.Name
+		if ui.views[ui.currentView] != "All" {
+			viewTitle = viewTitle + " / " + ui.views[ui.currentView]
+		}
+	}
+	if ui.projectFilter != "" {
+		viewTitle = viewTitle + " / " + ui.projectName(ui.projectFilter)
+	}
 	if ui.assignedToMe {
 		viewTitle = viewTitle + " (My Issues)"
 	}
@@ -778,7 +796,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 				case "white":
 					colorCode = "37"
 				case "gray", "grey":
-					colorCode = "90"
+					colorCode = "38;5;245"
 				}
 			}
 		}
@@ -897,7 +915,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		_, viewHeight := dv.Size()
 		_, oy := dv.Origin()
-		totalLines := len(dv.BufferLines())
+		totalLines := len(dv.ViewBufferLines())
 		if totalLines > viewHeight && totalLines > 0 {
 			scrollPercent := int((float64(oy) / float64(totalLines-viewHeight)) * 100)
 			if scrollPercent > 100 {
@@ -916,6 +934,10 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		// Cache rendered markdown - only re-render if issue or pane width changed
 		detailsWidthInner, _ := dv.Size()
 		ui.setMarkdownWidth(detailsWidthInner)
+		if issue.ID != ui.inspectedID {
+			dv.SetOrigin(0, 0)
+			ui.inspectedID = issue.ID
+		}
 		if issue.ID != ui.lastRenderedID {
 			ui.renderedDescription = ui.renderMarkdown(issue.Description)
 			ui.renderedComments = make([]string, len(issue.Comments.Nodes))
@@ -932,7 +954,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
-		propertyFmt := "\033[90m%-10s\033[0m %s\n"
+		propertyFmt := "\033[38;5;245m%-10s\033[0m %s\n"
 		fmt.Fprintf(dv, "\033[36m%s\033[0m\n", issue.Identifier)
 		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
 		fmt.Fprintf(dv, propertyFmt, "Status", fmt.Sprintf("\033[%sm%s\033[0m", stateColorCode, issue.State.Name))
@@ -970,22 +992,48 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 		fmt.Fprintf(dv, propertyFmt, "Team", teamName)
 
+		projectName := "—"
+		if issue.Project.Name != "" {
+			projectName = "\033[" + hexTo256(issue.Project.Color) + "m" + issue.Project.Name + "\033[0m"
+		}
+		fmt.Fprintf(dv, propertyFmt, "Project", projectName)
+
 		assigneeName := "—"
 		if issue.Assignee.Name != "" {
 			assigneeName = issue.Assignee.Name
 		}
 		fmt.Fprintf(dv, propertyFmt, "Assignee", assigneeName)
+
+		dueDate := "—"
+		if issue.DueDate != "" {
+			dueDate = issue.DueDate
+		}
+		fmt.Fprintf(dv, propertyFmt, "Due", dueDate)
+
+		estimate := "—"
+		if issue.Estimate > 0 {
+			estimate = fmt.Sprintf("%g", issue.Estimate)
+		}
+		fmt.Fprintf(dv, propertyFmt, "Estimate", estimate)
 		if issue.URL != "" {
 			fmt.Fprintf(dv, propertyFmt, "URL", "\033[34m"+issue.URL+"\033[0m")
 		}
 		if issue.Description != "" {
-			fmt.Fprintf(dv, "\n\033[90mDESCRIPTION\033[0m\n")
+			fmt.Fprintf(dv, "\n\033[38;5;245mDESCRIPTION\033[0m\n")
 			fmt.Fprintf(dv, "%s\n", ui.renderedDescription)
 		}
+		if len(issue.Labels.Nodes) > 0 {
+			var labels []string
+			for _, label := range issue.Labels.Nodes {
+				labels = append(labels, "\033["+hexTo256(label.Color)+"m#"+label.Name+"\033[0m")
+			}
+			fmt.Fprintf(dv, "\n\033[38;5;245mLABELS\033[0m\n")
+			fmt.Fprintf(dv, "%s\n", strings.Join(labels, "  "))
+		}
 		if len(issue.Comments.Nodes) > 0 {
-			fmt.Fprintf(dv, "\n\033[90mCOMMENTS\033[0m\n")
+			fmt.Fprintf(dv, "\n\033[38;5;245mCOMMENTS\033[0m\n")
 			for i, comment := range issue.Comments.Nodes {
-				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[90m(%s)\033[0m\n", comment.User.Name, comment.CreatedAt)
+				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[38;5;245m(%s)\033[0m\n", comment.User.Name, comment.CreatedAt)
 				if i < len(ui.renderedComments) {
 					fmt.Fprintf(dv, "%s\n\n", ui.renderedComments[i])
 				}
@@ -1029,7 +1077,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 		right := ""
 		if !ui.lastSynced.IsZero() {
-			right = "\033[90msynced " + ui.lastSynced.Format("3:04:05 pm") + "\033[0m"
+			right = "\033[38;5;245msynced " + ui.lastSynced.Format("3:04:05 pm") + "\033[0m"
 		}
 		width, _ := kv.Size()
 		available := width - visibleLen(right) - 2
@@ -1518,7 +1566,14 @@ func (ui *UI) refreshIssues(g *gocui.Gui, v *gocui.View) error {
 		if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
 			teamID = ui.teams[ui.currentTeam].ID
 		}
-		if fetchedIssues, err := ui.client.GetIssues(context.Background(), teamID); err == nil {
+		var fetchedIssues []api.Issue
+		var err error
+		if ui.currentCustomView != "" && teamID != "" {
+			fetchedIssues, err = ui.client.GetCustomViewIssues(context.Background(), ui.currentCustomView, teamID)
+		} else {
+			fetchedIssues, err = ui.client.GetIssues(context.Background(), teamID)
+		}
+		if err == nil {
 			ui.allIssues = fetchedIssues
 			ui.lastSynced = time.Now()
 			ui.showToast("Issues reloaded successfully")
@@ -1849,6 +1904,10 @@ func (ui *UI) nextTeam(g *gocui.Gui, v *gocui.View) error {
 
 func (ui *UI) setTeam(g *gocui.Gui, v *gocui.View, team int) error {
 	ui.currentTeam = team
+	ui.projectFilter = ""
+	if view := ui.customView(ui.currentCustomView); view != nil && !ui.customViewVisible(*view) {
+		ui.currentCustomView = ""
+	}
 	ui.availableStatuses = nil
 	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
 		for _, state := range ui.teams[ui.currentTeam].States {
@@ -1952,7 +2011,7 @@ func (ui *UI) hexToAnsi(hex string) string {
 	}
 
 	if brightness < 64 {
-		return "90"
+		return "38;5;245"
 	} else if brightness > 200 {
 		return "37"
 	}
@@ -1994,6 +2053,9 @@ func (ui *UI) filterIssues() []api.Issue {
 			continue
 		}
 		if currentViewName != "All" && issue.State.Name != currentViewName {
+			continue
+		}
+		if ui.projectFilter != "" && issue.Project.ID != ui.projectFilter {
 			continue
 		}
 		if ui.searchString != "" {
@@ -2377,22 +2439,40 @@ func (ui *UI) loadData() {
 	var teams []api.Team
 	var viewerID string
 	var viewerName string
+	var customViews []api.CustomView
+	var teamIssueCounts map[string]int
 	var apiErr error
 	var fetchedIssues []api.Issue
 
 	if ui.client != nil {
-		if fetchedTeams, err := ui.client.GetTeams(context.Background()); err == nil {
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			if viewer, err := ui.client.GetViewer(ctx); err == nil {
+				viewerID = viewer.ID
+				viewerName = viewer.Name
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			customViews, _ = ui.client.GetCustomViews(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			teamIssueCounts, _ = ui.client.GetTeamIssueCounts(ctx)
+		}()
+
+		if fetchedTeams, err := ui.client.GetTeams(ctx); err == nil {
 			teams = fetchedTeams
 		}
 		teamID := ""
 		if len(teams) > 0 {
 			teamID = teams[0].ID
 		}
-		fetchedIssues, apiErr = ui.client.GetIssues(context.Background(), teamID)
-		if viewer, err := ui.client.GetViewer(context.Background()); err == nil {
-			viewerID = viewer.ID
-			viewerName = viewer.Name
-		}
+		fetchedIssues, apiErr = ui.client.GetIssues(ctx, teamID)
+		wg.Wait()
 	} else {
 		apiErr = fmt.Errorf("no client")
 	}
@@ -2417,6 +2497,8 @@ func (ui *UI) loadData() {
 		ui.teams = teams
 		ui.viewerID = viewerID
 		ui.viewerName = viewerName
+		ui.customViews = customViews
+		ui.teamIssueCounts = teamIssueCounts
 		ui.availableStatuses = availableStatuses
 		if apiErr == nil {
 			ui.lastSynced = time.Now()
@@ -2453,7 +2535,7 @@ func (ui *UI) focusIssues(g *gocui.Gui, v *gocui.View) error {
 func (ui *UI) scrollDetailsDown(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		_, viewHeight := v.Size()
-		lines := len(v.BufferLines())
+		lines := len(v.ViewBufferLines())
 		ox, oy := v.Origin()
 
 		if oy+viewHeight < lines {
@@ -2561,16 +2643,45 @@ func (ui *UI) buildNavItems() []navItem {
 		{kind: "header", label: "◇ WORKSPACE"},
 		{kind: "workspace", index: 0, label: "My issues"},
 		{kind: "workspace", index: 1, label: "All issues"},
-		{kind: "header", label: "◫ VIEWS"},
+		{kind: "header", label: "◌ STATUS"},
 	}
 	for i, name := range ui.views {
 		items = append(items, navItem{kind: "view", index: i, label: name})
 	}
+
+	var customViews []navItem
+	for _, view := range ui.customViews {
+		if ui.customViewVisible(view) {
+			customViews = append(customViews, navItem{kind: "customView", id: view.ID, label: view.Name, color: view.Color})
+		}
+	}
+	if len(customViews) > 0 {
+		items = append(items, navItem{kind: "header", label: "◫ VIEWS"})
+		items = append(items, customViews...)
+	}
+
 	if len(ui.teams) > 0 {
 		items = append(items, navItem{kind: "header", label: "▦ TEAMS"})
 		for i, team := range ui.teams {
 			items = append(items, navItem{kind: "team", index: i, label: team.Name})
 		}
+	}
+
+	var projects []navItem
+	seen := map[string]bool{}
+	for _, issue := range ui.allIssues {
+		if issue.Project.ID == "" || seen[issue.Project.ID] {
+			continue
+		}
+		seen[issue.Project.ID] = true
+		projects = append(projects, navItem{kind: "project", id: issue.Project.ID, label: issue.Project.Name, color: issue.Project.Color})
+	}
+	if len(projects) > 0 {
+		sort.Slice(projects, func(i, j int) bool {
+			return strings.ToLower(projects[i].label) < strings.ToLower(projects[j].label)
+		})
+		items = append(items, navItem{kind: "header", label: "◆ PROJECTS"})
+		items = append(items, projects...)
 	}
 	return items
 }
@@ -2578,7 +2689,7 @@ func (ui *UI) buildNavItems() []navItem {
 // renderNavItem formats a navigation row to fit within width columns
 func (ui *UI) renderNavItem(item navItem, width int) string {
 	if item.kind == "header" {
-		return "\033[90m" + truncate(item.label, width) + "\033[0m"
+		return "\033[38;5;245m" + truncate(item.label, width) + "\033[0m"
 	}
 
 	active := false
@@ -2587,11 +2698,16 @@ func (ui *UI) renderNavItem(item navItem, width int) string {
 	prefix := ""
 	switch item.kind {
 	case "workspace":
-		active = ui.assignedToMe == (item.index == 0)
-		count = fmt.Sprint(ui.countIssues("All", item.index == 0))
+		active = ui.assignedToMe == (item.index == 0) && ui.currentCustomView == "" && ui.projectFilter == ""
+		count = fmt.Sprint(ui.countIssues("All", item.index == 0, ""))
 	case "view":
 		active = item.index == ui.currentView
-		count = fmt.Sprint(ui.countIssues(ui.views[item.index], ui.assignedToMe))
+		count = fmt.Sprint(ui.countIssues(ui.views[item.index], ui.assignedToMe, ui.projectFilter))
+	case "customView":
+		active = item.id == ui.currentCustomView
+	case "project":
+		active = item.id == ui.projectFilter
+		count = fmt.Sprint(ui.countIssues("All", ui.assignedToMe, item.id))
 	case "team":
 		active = item.index == ui.currentTeam
 		maxKeyLen := 0
@@ -2601,6 +2717,9 @@ func (ui *UI) renderNavItem(item navItem, width int) string {
 			}
 		}
 		prefix = fmt.Sprintf("%-*s ", maxKeyLen, ui.teams[item.index].Key)
+		if ui.teamIssueCounts != nil {
+			count = fmt.Sprint(ui.teamIssueCounts[ui.teams[item.index].ID])
+		}
 	}
 
 	marker := "  "
@@ -2614,17 +2733,23 @@ func (ui *UI) renderNavItem(item navItem, width int) string {
 	}
 	label = truncate(label, labelWidth)
 	padding := strings.Repeat(" ", labelWidth-len([]rune(label)))
-	if active {
+	if item.color != "" {
+		style := hexTo256(item.color)
+		if active {
+			style += ";1"
+		}
+		label = "\033[" + style + "m" + label + "\033[0m"
+	} else if active {
 		label = "\033[1m" + label + "\033[0m"
 	}
 	if prefix != "" {
 		prefix = "\033[36m" + prefix + "\033[0m"
 	}
-	return marker + prefix + label + padding + " \033[90m" + count + "\033[0m"
+	return marker + prefix + label + padding + " \033[38;5;245m" + count + "\033[0m"
 }
 
-// countIssues counts loaded issues in the given state ("All" matches any state)
-func (ui *UI) countIssues(stateName string, mineOnly bool) int {
+// countIssues counts loaded issues in the given state ("All" matches any state) and project ("" matches any)
+func (ui *UI) countIssues(stateName string, mineOnly bool, projectID string) int {
 	count := 0
 	for _, issue := range ui.allIssues {
 		if mineOnly && issue.Assignee.ID != ui.viewerID {
@@ -2633,9 +2758,43 @@ func (ui *UI) countIssues(stateName string, mineOnly bool) int {
 		if stateName != "All" && issue.State.Name != stateName {
 			continue
 		}
+		if projectID != "" && issue.Project.ID != projectID {
+			continue
+		}
 		count++
 	}
 	return count
+}
+
+// customView returns the loaded saved view with the given ID, or nil
+func (ui *UI) customView(id string) *api.CustomView {
+	if id == "" {
+		return nil
+	}
+	for i := range ui.customViews {
+		if ui.customViews[i].ID == id {
+			return &ui.customViews[i]
+		}
+	}
+	return nil
+}
+
+// customViewVisible reports whether a saved view belongs to the workspace or the current team
+func (ui *UI) customViewVisible(view api.CustomView) bool {
+	if view.Team == nil {
+		return true
+	}
+	return ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) && view.Team.ID == ui.teams[ui.currentTeam].ID
+}
+
+// projectName looks up a project's name from the loaded issues
+func (ui *UI) projectName(id string) string {
+	for _, issue := range ui.allIssues {
+		if issue.Project.ID == id {
+			return issue.Project.Name
+		}
+	}
+	return ""
 }
 
 // nextNavItem returns the index of the next selectable nav item from start in direction dir
@@ -2669,8 +2828,23 @@ func (ui *UI) navSelect(g *gocui.Gui, v *gocui.View) error {
 	switch item.kind {
 	case "workspace":
 		ui.assignedToMe = item.index == 0
+		ui.projectFilter = ""
+		if ui.currentCustomView != "" {
+			ui.currentCustomView = ""
+			return ui.refreshIssues(g, v)
+		}
 	case "view":
 		ui.currentView = item.index
+	case "customView":
+		if item.id != ui.currentCustomView {
+			ui.currentCustomView = item.id
+			ui.currentView = 0
+			ui.projectFilter = ""
+			return ui.refreshIssues(g, v)
+		}
+		return nil
+	case "project":
+		ui.projectFilter = item.id
 	case "team":
 		if item.index != ui.currentTeam {
 			return ui.setTeam(g, v, item.index)
@@ -2722,10 +2896,18 @@ func (ui *UI) breadcrumb() string {
 	if ui.currentTeam >= 0 && ui.currentTeam < len(ui.teams) {
 		parts[0] = ui.teams[ui.currentTeam].Name
 	}
-	if ui.assignedToMe {
+	if view := ui.customView(ui.currentCustomView); view != nil {
+		parts = append(parts, view.Name)
+		if ui.assignedToMe {
+			parts = append(parts, "Mine")
+		}
+	} else if ui.assignedToMe {
 		parts = append(parts, "My issues")
 	} else {
 		parts = append(parts, "All issues")
+	}
+	if ui.projectFilter != "" {
+		parts = append(parts, ui.projectName(ui.projectFilter))
 	}
 	if ui.views[ui.currentView] != "All" {
 		parts = append(parts, ui.views[ui.currentView])
@@ -2758,4 +2940,42 @@ func truncate(s string, width int) string {
 		return "…"
 	}
 	return string(runes[:width-1]) + "…"
+}
+
+func (ui *UI) reload(g *gocui.Gui, v *gocui.View) error {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+		return nil
+	}
+	if ui.client != nil {
+		ctx := context.Background()
+		if views, err := ui.client.GetCustomViews(ctx); err == nil {
+			ui.customViews = views
+		}
+		if counts, err := ui.client.GetTeamIssueCounts(ctx); err == nil {
+			ui.teamIssueCounts = counts
+		}
+	}
+	return ui.refreshIssues(g, v)
+}
+
+// hexTo256 converts a hex color to the nearest 256-color foreground code
+func hexTo256(hex string) string {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return "39"
+	}
+
+	var r, g, b int
+	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+
+	toCube := func(c int) int {
+		if c < 48 {
+			return 0
+		}
+		if c < 115 {
+			return 1
+		}
+		return (c - 35) / 40
+	}
+	return fmt.Sprintf("38;5;%d", 16+36*toCube(r)+6*toCube(g)+toCube(b))
 }

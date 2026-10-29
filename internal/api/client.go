@@ -45,9 +45,90 @@ type Issue struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"assignee"`
+	Project struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	} `json:"project"`
+	Labels struct {
+		Nodes []Label `json:"nodes"`
+	} `json:"labels"`
+	DueDate  string  `json:"dueDate"`
+	Estimate float64 `json:"estimate"`
 	Comments struct {
 		Nodes []Comment `json:"nodes"`
 	} `json:"comments"`
+}
+
+// Label represents an issue label
+type Label struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+// CustomView represents a saved Linear issue view
+type CustomView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Color     string `json:"color"`
+	ModelName string `json:"modelName"`
+	Team      *struct {
+		ID string `json:"id"`
+	} `json:"team"`
+}
+
+// issueFields is the GraphQL selection shared by issue queries
+const issueFields = `
+	id
+	identifier
+	title
+	description
+	url
+	branchName
+	state {
+		name
+		type
+		color
+	}
+	priority
+	team {
+		id
+	}
+	assignee {
+		id
+		name
+	}
+	project {
+		id
+		name
+		color
+	}
+	labels {
+		nodes {
+			name
+			color
+		}
+	}
+	dueDate
+	estimate
+	comments {
+		nodes {
+			body
+			createdAt
+			user {
+				name
+			}
+		}
+	}
+`
+
+// maxIssuePages caps how many pages of issues are fetched per request
+const maxIssuePages = 20
+
+// pageInfo holds GraphQL connection pagination state
+type pageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
 }
 
 // Comment represents a comment on an issue
@@ -210,8 +291,8 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 	var query string
 	if teamID != "" {
 		query = `
-		query($teamID: ID!) {
-			issues(filter: {
+		query($teamID: ID!, $after: String) {
+			issues(first: 50, after: $after, filter: {
 				team: { id: { eq: $teamID } }
 				state: {
 					name: {
@@ -219,106 +300,229 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 					}
 				}
 			}) {
-				nodes {
-					id
-					identifier
-					title
-					description
-					url
-					branchName
-					state {
-						name
-						type
-						color
-					}
-					priority
-					team {
-						id
-					}
-					assignee {
-						id
-						name
-					}
-					comments {
-						nodes {
-							body
-							createdAt
-							user {
-								name
-							}
-						}
-					}
+				nodes {` + issueFields + `}
+				pageInfo {
+					hasNextPage
+					endCursor
 				}
 			}
 		}
 		`
 	} else {
 		query = `
-		query {
-			issues(filter: {
+		query($after: String) {
+			issues(first: 50, after: $after, filter: {
 				state: {
 					name: {
 						in: ["In Review", "In Progress", "Blocked", "Todo", "Backlog"]
 					}
 				}
 			}) {
-				nodes {
-					id
-					identifier
-					title
-					description
-					url
-					branchName
-					state {
-						name
-						type
-						color
-					}
-					team {
-						id
-					}
-					assignee {
-						id
-						name
-					}
-					comments {
-						nodes {
-							body
-							createdAt
-							user {
-								name
-							}
-						}
-					}
+				nodes {` + issueFields + `}
+				pageInfo {
+					hasNextPage
+					endCursor
 				}
 			}
 		}
 		`
 	}
 
-	req := graphql.NewRequest(query)
+	var issues []Issue
+	var after *string
+	for page := 0; page < maxIssuePages; page++ {
+		req := graphql.NewRequest(query)
 
-	if teamID != "" {
-		req.Var("teamID", teamID)
+		if teamID != "" {
+			req.Var("teamID", teamID)
+		}
+		req.Var("after", after)
+
+		// Set authorization header
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", c.apiKey)
+		}
+
+		var resp struct {
+			Issues struct {
+				Nodes    []Issue  `json:"nodes"`
+				PageInfo pageInfo `json:"pageInfo"`
+			} `json:"issues"`
+		}
+
+		if err := c.client.Run(ctx, req, &resp); err != nil {
+			return nil, err
+		}
+
+		issues = append(issues, resp.Issues.Nodes...)
+		if !resp.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor := resp.Issues.PageInfo.EndCursor
+		after = &cursor
 	}
 
-	// Set authorization header
+	sortIssuesByState(issues)
+	return issues, nil
+}
+
+// GetCustomViewIssues fetches the issues matched by a saved view, limited to a team
+func (c *Client) GetCustomViewIssues(ctx context.Context, viewID string, teamID string) ([]Issue, error) {
+	query := `
+		query($viewID: String!, $teamID: ID!, $after: String) {
+			customView(id: $viewID) {
+				issues(first: 50, after: $after, filter: { team: { id: { eq: $teamID } } }) {
+					nodes {` + issueFields + `}
+					pageInfo {
+						hasNextPage
+						endCursor
+					}
+				}
+			}
+		}
+	`
+
+	var issues []Issue
+	var after *string
+	for page := 0; page < maxIssuePages; page++ {
+		req := graphql.NewRequest(query)
+		req.Var("viewID", viewID)
+		req.Var("teamID", teamID)
+		req.Var("after", after)
+
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", c.apiKey)
+		}
+
+		var resp struct {
+			CustomView struct {
+				Issues struct {
+					Nodes    []Issue  `json:"nodes"`
+					PageInfo pageInfo `json:"pageInfo"`
+				} `json:"issues"`
+			} `json:"customView"`
+		}
+
+		if err := c.client.Run(ctx, req, &resp); err != nil {
+			return nil, err
+		}
+
+		issues = append(issues, resp.CustomView.Issues.Nodes...)
+		if !resp.CustomView.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor := resp.CustomView.Issues.PageInfo.EndCursor
+		after = &cursor
+	}
+
+	sortIssuesByState(issues)
+	return issues, nil
+}
+
+// GetCustomViews fetches the saved issue views visible to the current user
+func (c *Client) GetCustomViews(ctx context.Context) ([]CustomView, error) {
+	req := graphql.NewRequest(`
+		query {
+			customViews(first: 100) {
+				nodes {
+					id
+					name
+					color
+					modelName
+					team {
+						id
+					}
+				}
+			}
+		}
+	`)
+
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", c.apiKey)
 	}
 
 	var resp struct {
-		Issues struct {
-			Nodes []Issue `json:"nodes"`
-		} `json:"issues"`
+		CustomViews struct {
+			Nodes []CustomView `json:"nodes"`
+		} `json:"customViews"`
 	}
 
 	if err := c.client.Run(ctx, req, &resp); err != nil {
 		return nil, err
 	}
 
-	issues := resp.Issues.Nodes
+	var views []CustomView
+	for _, view := range resp.CustomViews.Nodes {
+		if view.ModelName == "Issue" {
+			views = append(views, view)
+		}
+	}
+	return views, nil
+}
 
+// GetTeamIssueCounts counts open issues per team ID across the workspace
+func (c *Client) GetTeamIssueCounts(ctx context.Context) (map[string]int, error) {
+	query := `
+		query($after: String) {
+			issues(first: 250, after: $after, filter: {
+				state: {
+					name: {
+						in: ["Triage", "In Review", "In Progress", "Blocked", "Todo", "Backlog"]
+					}
+				}
+			}) {
+				nodes {
+					team {
+						id
+					}
+				}
+				pageInfo {
+					hasNextPage
+					endCursor
+				}
+			}
+		}
+	`
+
+	counts := map[string]int{}
+	var after *string
+	for page := 0; page < maxIssuePages; page++ {
+		req := graphql.NewRequest(query)
+		req.Var("after", after)
+
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", c.apiKey)
+		}
+
+		var resp struct {
+			Issues struct {
+				Nodes []struct {
+					Team struct {
+						ID string `json:"id"`
+					} `json:"team"`
+				} `json:"nodes"`
+				PageInfo pageInfo `json:"pageInfo"`
+			} `json:"issues"`
+		}
+
+		if err := c.client.Run(ctx, req, &resp); err != nil {
+			return nil, err
+		}
+
+		for _, node := range resp.Issues.Nodes {
+			counts[node.Team.ID]++
+		}
+		if !resp.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor := resp.Issues.PageInfo.EndCursor
+		after = &cursor
+	}
+
+	return counts, nil
+}
+
+func sortIssuesByState(issues []Issue) {
 	stateOrder := map[string]int{
 		"In Review":   0,
 		"In Progress": 1,
@@ -341,7 +545,6 @@ func (c *Client) GetIssues(ctx context.Context, teamID string) ([]Issue, error) 
 		return orderI < orderJ
 	})
 
-	return issues, nil
 }
 
 // AddComment adds a comment to an issue
