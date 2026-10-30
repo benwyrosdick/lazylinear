@@ -11,6 +11,9 @@ import (
 // Config represents the application configuration
 type Config struct {
 	APIKey string `json:"api_key"`
+	// ImageScale is how many terminal pixels make up one desktop pixel when showing
+	// images; zero guesses it from the terminal's cell size
+	ImageScale float64 `json:"image_scale,omitempty"`
 }
 
 // State is the view the app was last left on, restored at startup

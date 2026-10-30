@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -32,12 +33,17 @@ const firstImageID = 0x4c4c0001
 // maxImagePixels rejects images too large to decode comfortably
 const maxImagePixels = 50_000_000
 
+// hiDPICellHeight is the cell height, in pixels, at which a terminal is assumed to draw at
+// twice the desktop's pixel size, as on a retina Mac or under fractional scaling
+const hiDPICellHeight = 28
+
 // inlineImage is a downloaded image, PNG encoded for the terminal
 type inlineImage struct {
 	id          uint32
 	data        []byte
 	width       int
 	height      int
+	scale       float64
 	err         error
 	transmitted bool
 }
@@ -134,8 +140,7 @@ func (ui *UI) imageLines(index int, indent int) []string {
 		return []string{padding + "\033[38;5;245mImage: " + label + reason + " → " + ref.url + "\033[0m"}
 	}
 
-	cellW, cellH := ui.cellSize()
-	ref.cols, ref.rows = imageSize(img.width, img.height, cellW, cellH, maxCols, max(ui.mdHeight-1, 1))
+	ref.cols, ref.rows = ui.imageCells(img, maxCols, max(ui.mdHeight-1, 1))
 	lines := make([]string, ref.rows)
 	lines[0] = padding + imageToken(index)
 	return lines
@@ -147,6 +152,31 @@ func (ui *UI) cellSize() (int, int) {
 		return 10, 20
 	}
 	return ui.cellWidth, ui.cellHeight
+}
+
+// displayScale returns how many terminal pixels make up one desktop pixel
+func (ui *UI) displayScale() float64 {
+	if ui.imageScale > 0 {
+		return ui.imageScale
+	}
+	if _, cellH := ui.cellSize(); cellH >= hiDPICellHeight {
+		return 2
+	}
+	return 1
+}
+
+// naturalWidth returns the terminal pixels an image spans at 100%, which is one image pixel per
+// desktop pixel, or per point for a retina image, as a browser would show it
+func (ui *UI) naturalWidth(img *inlineImage) float64 {
+	return float64(img.width) * ui.displayScale() / img.scale
+}
+
+// imageCells returns the cells an image fills at 100%, shrunk to fit maxCols by maxRows
+func (ui *UI) imageCells(img *inlineImage, maxCols, maxRows int) (int, int) {
+	cellW, cellH := ui.cellSize()
+	width := max(int(math.Round(ui.naturalWidth(img))), 1)
+	height := max(int(math.Round(float64(width)*float64(img.height)/float64(img.width))), 1)
+	return imageSize(width, height, cellW, cellH, maxCols, maxRows)
 }
 
 func imageToken(index int) string {
@@ -178,13 +208,14 @@ func (ui *UI) loadImage(url string) *inlineImage {
 
 // fetchImage downloads an image and redraws the inspector once it is ready
 func (ui *UI) fetchImage(url string) {
-	img := &inlineImage{}
+	img := &inlineImage{scale: 1}
 	if ui.client == nil {
 		img.err = fmt.Errorf("no client")
 	} else if data, err := ui.client.DownloadFile(context.Background(), url); err != nil {
 		img.err = err
 	} else {
 		img.data, img.width, img.height, img.err = encodePNG(data)
+		img.scale = pngPixelScale(img.data)
 	}
 
 	ui.imagesMu.Lock()
@@ -221,6 +252,31 @@ func encodePNG(data []byte) ([]byte, int, int, error) {
 		return nil, 0, 0, err
 	}
 	return buf.Bytes(), config.Width, config.Height, nil
+}
+
+// pngPixelScale returns the image pixels per point recorded in a PNG's pHYs chunk: 2 for a
+// retina screenshot saved at 144 DPI, and 1 when the image isn't marked as high resolution
+func pngPixelScale(data []byte) float64 {
+	const signatureLen = 8
+	for i := signatureLen; i+8 <= len(data); {
+		length := int(binary.BigEndian.Uint32(data[i:]))
+		chunk := string(data[i+4 : i+8])
+		body := i + 8
+		if chunk == "IDAT" || length < 0 || body+length > len(data) {
+			break
+		}
+		// pHYs holds pixels per unit for x and y, then a unit byte where 1 means meters
+		if chunk == "pHYs" && length == 9 && data[body+8] == 1 {
+			dpi := float64(binary.BigEndian.Uint32(data[body:])) * 0.0254
+			// Only accept the exact multiples of 72 DPI that macOS writes, not print resolutions
+			if scale := math.Round(dpi / 72); scale >= 2 && scale <= 3 && math.Abs(dpi-scale*72) < 1 {
+				return scale
+			}
+			break
+		}
+		i = body + length + 4
+	}
+	return 1
 }
 
 // inspectorImagePlacements finds where each image token lands in the wrapped inspector
@@ -392,8 +448,7 @@ func (ui *UI) closeImage(g *gocui.Gui, v *gocui.View) error {
 // imageModalPlacement centers the viewed image at 100% size, or shrunk to fit the screen if that is smaller
 func (ui *UI) imageModalPlacement(maxX, maxY int) imagePlacement {
 	img := ui.viewedImage.image
-	cellW, cellH := ui.cellSize()
-	cols, rows := imageSize(img.width, img.height, cellW, cellH, max(maxX-4, 1), max(maxY-4, 1))
+	cols, rows := ui.imageCells(img, max(maxX-4, 1), max(maxY-4, 1))
 	return imagePlacement{
 		image: img,
 		label: ui.viewedImage.label,
@@ -409,7 +464,7 @@ func (ui *UI) imageModalPlacement(maxX, maxY int) imagePlacement {
 // imageModalTitle names the viewed image and its zoom level, fitting the frame width
 func (ui *UI) imageModalTitle(p imagePlacement) string {
 	cellW, _ := ui.cellSize()
-	zoom := min(100, int(math.Round(float64(p.cols*cellW)*100/float64(p.image.width))))
+	zoom := min(100, int(math.Round(float64(p.cols*cellW)*100/ui.naturalWidth(p.image))))
 	suffix := fmt.Sprintf(" - %d%% (esc to close)", zoom)
 
 	// gocui positions title characters by byte, so keep the label ASCII

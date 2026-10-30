@@ -55,6 +55,8 @@ A config at the old location, `~/.lazylinear/config.json`, is moved to the new o
 
 lazylinear remembers the team, status, view, project, and "my issues" filter you were on when you quit, and reopens them next time. They are saved in `~/.local/state/lazylinear/state.json` (or `$XDG_STATE_HOME/lazylinear/state.json`).
 
+Images are shown at the size a browser would show them. Terminals don't report the display's scale, so lazylinear assumes a terminal with cells 28 pixels or taller (a retina Mac, or Linux with fractional scaling) draws at 2x. If images look twice too big or too small, set `"image_scale"` in the config to the number of terminal pixels per desktop pixel, such as `1` or `2`. Retina screenshots saved at 144 DPI are shown at half their pixel size, as they are in a browser.
+
 ## Usage
 
 Start the application:

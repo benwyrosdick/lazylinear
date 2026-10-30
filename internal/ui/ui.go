@@ -117,6 +117,7 @@ type UI struct {
 	screenHeight      int
 	cellWidth         int
 	cellHeight        int
+	imageScale        float64
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -140,7 +141,7 @@ func (e *commentEditor) Edit(v *gocui.View, key gocui.Key, ch rune, mod gocui.Mo
 }
 
 // NewUI creates a new UI instance
-func NewUI(client *api.Client) (*UI, error) {
+func NewUI(client *api.Client, cfg *config.Config) (*UI, error) {
 	// Detect the terminal background before gocui takes over the terminal
 	mdStyle := "dark"
 	if !termenv.HasDarkBackground() {
@@ -167,6 +168,7 @@ func NewUI(client *api.Client) (*UI, error) {
 	ui := &UI{
 		gui:                 g,
 		client:              client,
+		imageScale:          cfg.ImageScale,
 		issues:              []api.Issue{},
 		allIssues:           []api.Issue{},
 		selectedIssue:       -1,

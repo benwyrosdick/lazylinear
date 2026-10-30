@@ -17,7 +17,7 @@ func main() {
 
 	client := api.NewClient(cfg.APIKey)
 
-	ui, err := ui.NewUI(client)
+	ui, err := ui.NewUI(client, cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
