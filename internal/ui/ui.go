@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -96,6 +97,18 @@ type UI struct {
 	currentCustomView string
 	projectFilter     string
 	teamIssueCounts   map[string]int
+	tty               *os.File
+	images            map[string]*inlineImage
+	imagesMu          sync.Mutex
+	nextImageID       uint32
+	inspectorImages   []imageRef
+	placedImages      []imagePlacement
+	redrawImages      bool
+	mdHeight          int
+	screenWidth       int
+	screenHeight      int
+	cellWidth         int
+	cellHeight        int
 }
 
 // commentEditor is a custom editor that handles Esc key
@@ -125,6 +138,7 @@ func NewUI(client *api.Client) (*UI, error) {
 	if !termenv.HasDarkBackground() {
 		mdStyle = "light"
 	}
+	tty := openImageTerminal()
 
 	g, err := gocui.NewGui(gocui.Output256)
 	if err != nil {
@@ -190,6 +204,9 @@ func NewUI(client *api.Client) (*UI, error) {
 		showCreate:       false,
 		createActivePane: "title",
 		mdStyle:          mdStyle,
+		tty:              tty,
+		images:           map[string]*inlineImage{},
+		nextImageID:      firstImageID,
 		loading:          true,
 		spinnerFrame:     0,
 		loadingTimer:     nil,
@@ -552,6 +569,7 @@ func (ui *UI) Run() error {
 		if ui.toastTimer != nil {
 			ui.toastTimer.Stop()
 		}
+		ui.closeImages()
 		ui.gui.Close()
 	}()
 	return ui.gui.MainLoop()
@@ -564,6 +582,20 @@ func (ui *UI) Close() {
 
 func (ui *UI) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
+	if maxX != ui.screenWidth || maxY != ui.screenHeight {
+		ui.screenWidth, ui.screenHeight = maxX, maxY
+		if ui.tty != nil {
+			ui.cellWidth, ui.cellHeight = cellPixelSize(ui.tty)
+			ui.lastRenderedID = ""
+			// termbox clears the screen after a resize, which can wipe images, so draw them again afterwards
+			time.AfterFunc(100*time.Millisecond, func() {
+				ui.gui.Update(func(g *gocui.Gui) error {
+					ui.redrawImages = true
+					return nil
+				})
+			})
+		}
+	}
 
 	// Show loading spinner if still loading
 	if ui.loading {
@@ -1004,21 +1036,28 @@ func (ui *UI) layout(g *gocui.Gui) error {
 
 	// Update details content
 	dv.Clear()
+	var placements []imagePlacement
 	if ui.selectedIssue >= 0 && ui.selectedIssue < len(ui.issues) {
 		issue := ui.issues[ui.selectedIssue]
+		var content strings.Builder
 
-		// Cache rendered markdown - only re-render if issue or pane width changed
-		detailsWidthInner, _ := dv.Size()
+		// Cache rendered markdown - only re-render if issue or pane size changed
+		detailsWidthInner, detailsHeightInner := dv.Size()
 		ui.setMarkdownWidth(detailsWidthInner)
+		if ui.tty != nil && detailsHeightInner != ui.mdHeight {
+			ui.mdHeight = detailsHeightInner
+			ui.lastRenderedID = ""
+		}
 		if issue.ID != ui.inspectedID {
 			dv.SetOrigin(0, 0)
 			ui.inspectedID = issue.ID
 		}
 		if issue.ID != ui.lastRenderedID {
-			ui.renderedDescription = ui.renderMarkdown(issue.Description)
+			ui.inspectorImages = nil
+			ui.renderedDescription = ui.renderMarkdownWithImages(issue.Description)
 			ui.renderedComments = make([]string, len(issue.Comments.Nodes))
 			for i, comment := range issue.Comments.Nodes {
-				ui.renderedComments[i] = ui.renderMarkdown(comment.Body)
+				ui.renderedComments[i] = ui.renderMarkdownWithImages(comment.Body)
 			}
 			ui.lastRenderedID = issue.ID
 		}
@@ -1031,9 +1070,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 
 		propertyFmt := "\033[38;5;245m%-10s\033[0m %s\n"
-		fmt.Fprintf(dv, "\033[36m%s\033[0m\n", issue.Identifier)
-		fmt.Fprintf(dv, "\033[1m%s\033[0m\n\n", issue.Title)
-		fmt.Fprintf(dv, propertyFmt, "Status", fmt.Sprintf("\033[%sm%s\033[0m", stateColorCode, issue.State.Name))
+		fmt.Fprintf(&content, "\033[36m%s\033[0m\n", issue.Identifier)
+		fmt.Fprintf(&content, "\033[1m%s\033[0m\n\n", issue.Title)
+		fmt.Fprintf(&content, propertyFmt, "Status", fmt.Sprintf("\033[%sm%s\033[0m", stateColorCode, issue.State.Name))
 
 		priorityIcon := noPriorityIcon
 		priorityLabel := "No Priority"
@@ -1054,9 +1093,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			priorityLabel = "Low"
 		}
 		if priorityColor != "" {
-			fmt.Fprintf(dv, propertyFmt, "Priority", fmt.Sprintf("%s%s %s\033[0m", priorityColor, priorityIcon, priorityLabel))
+			fmt.Fprintf(&content, propertyFmt, "Priority", fmt.Sprintf("%s%s %s\033[0m", priorityColor, priorityIcon, priorityLabel))
 		} else {
-			fmt.Fprintf(dv, propertyFmt, "Priority", fmt.Sprintf("%s %s", priorityIcon, priorityLabel))
+			fmt.Fprintf(&content, propertyFmt, "Priority", fmt.Sprintf("%s %s", priorityIcon, priorityLabel))
 		}
 
 		teamName := "—"
@@ -1066,59 +1105,73 @@ func (ui *UI) layout(g *gocui.Gui) error {
 				break
 			}
 		}
-		fmt.Fprintf(dv, propertyFmt, "Team", teamName)
+		fmt.Fprintf(&content, propertyFmt, "Team", teamName)
 
 		projectName := "—"
 		if issue.Project.Name != "" {
 			projectName = "\033[" + hexTo256(issue.Project.Color) + "m" + issue.Project.Name + "\033[0m"
 		}
-		fmt.Fprintf(dv, propertyFmt, "Project", projectName)
+		fmt.Fprintf(&content, propertyFmt, "Project", projectName)
 
 		assigneeName := "—"
 		if issue.Assignee.Name != "" {
 			assigneeName = issue.Assignee.Name
 		}
-		fmt.Fprintf(dv, propertyFmt, "Assignee", assigneeName)
+		fmt.Fprintf(&content, propertyFmt, "Assignee", assigneeName)
 
 		dueDate := "—"
 		if issue.DueDate != "" {
 			dueDate = issue.DueDate
 		}
-		fmt.Fprintf(dv, propertyFmt, "Due", dueDate)
+		fmt.Fprintf(&content, propertyFmt, "Due", dueDate)
 
 		estimate := "—"
 		if issue.Estimate > 0 {
 			estimate = fmt.Sprintf("%g", issue.Estimate)
 		}
-		fmt.Fprintf(dv, propertyFmt, "Estimate", estimate)
+		fmt.Fprintf(&content, propertyFmt, "Estimate", estimate)
 		if issue.URL != "" {
-			fmt.Fprintf(dv, propertyFmt, "URL", "\033[34m"+issue.URL+"\033[0m")
+			fmt.Fprintf(&content, propertyFmt, "URL", "\033[34m"+issue.URL+"\033[0m")
 		}
 		if issue.Description != "" {
-			fmt.Fprintf(dv, "\n\033[38;5;245mDESCRIPTION\033[0m\n")
-			fmt.Fprintf(dv, "%s\n", ui.renderedDescription)
+			fmt.Fprintf(&content, "\n\033[38;5;245mDESCRIPTION\033[0m\n")
+			fmt.Fprintf(&content, "%s\n", ui.renderedDescription)
 		}
 		if len(issue.Labels.Nodes) > 0 {
 			var labels []string
 			for _, label := range issue.Labels.Nodes {
 				labels = append(labels, "\033["+hexTo256(label.Color)+"m#"+label.Name+"\033[0m")
 			}
-			fmt.Fprintf(dv, "\n\033[38;5;245mLABELS\033[0m\n")
-			fmt.Fprintf(dv, "%s\n", strings.Join(labels, "  "))
+			fmt.Fprintf(&content, "\n\033[38;5;245mLABELS\033[0m\n")
+			fmt.Fprintf(&content, "%s\n", strings.Join(labels, "  "))
 		}
 		if len(issue.Comments.Nodes) > 0 {
-			fmt.Fprintf(dv, "\n\033[38;5;245mCOMMENTS\033[0m\n")
+			fmt.Fprintf(&content, "\n\033[38;5;245mCOMMENTS\033[0m\n")
 			for i, comment := range issue.Comments.Nodes {
-				fmt.Fprintf(dv, "\033[33m%s\033[0m \033[38;5;245m(%s)\033[0m\n", comment.User.Name, comment.CreatedAt)
+				fmt.Fprintf(&content, "\033[33m%s\033[0m \033[38;5;245m(%s)\033[0m\n", comment.User.Name, comment.CreatedAt)
 				if i < len(ui.renderedComments) {
-					fmt.Fprintf(dv, "%s\n\n", ui.renderedComments[i])
+					fmt.Fprintf(&content, "%s\n\n", ui.renderedComments[i])
 				}
 			}
 		}
+
+		// Images are drawn over the blank rows reserved for them, except under modals and the toast
+		modalOpen := ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp
+		if ui.tty != nil && !modalOpen {
+			clipY := bottomY
+			if ui.toastMessage != "" {
+				clipY = bottomY - 3
+			}
+			placements = ui.inspectorImagePlacements(content.String(), dv, detailsX0, topY, clipY)
+		}
+		fmt.Fprint(dv, imageTokenPattern.ReplaceAllStringFunc(content.String(), func(token string) string {
+			return strings.Repeat(" ", len(token))
+		}))
 	} else {
 		fmt.Fprintln(dv, "Select an issue to view details")
 		fmt.Fprintln(dv, "Press '?' for help")
 	}
+	ui.drawImages(placements)
 
 	// Keybindings bar (bottom)
 	if v, err := g.SetView("keybindings", 0, maxY-2, maxX-1, maxY); err != nil {

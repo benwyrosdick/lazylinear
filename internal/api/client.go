@@ -2,8 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/machinebox/graphql"
 )
@@ -23,6 +27,43 @@ func NewClient(apiKey string) *Client {
 		client: client,
 		apiKey: apiKey,
 	}
+}
+
+// maxDownloadBytes caps the size of files fetched by DownloadFile
+const maxDownloadBytes = 25 << 20
+
+// DownloadFile fetches a file linked from Linear content. Requests to Linear's
+// upload storage are authenticated with the API key; other hosts get no credentials.
+func (c *Client) DownloadFile(ctx context.Context, fileURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if req.URL.Scheme != "https" && req.URL.Scheme != "http" {
+		return nil, fmt.Errorf("unsupported URL scheme %q", req.URL.Scheme)
+	}
+	if req.URL.Hostname() == "uploads.linear.app" && c.apiKey != "" {
+		req.Header.Set("Authorization", c.apiKey)
+	}
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download failed: %s", resp.Status)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxDownloadBytes {
+		return nil, fmt.Errorf("file is larger than %d MB", maxDownloadBytes>>20)
+	}
+	return data, nil
 }
 
 // Issue represents a Linear issue

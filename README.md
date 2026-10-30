@@ -100,7 +100,7 @@ When editing or creating issues:
 ## Features
 
 - **Multi-team support** - Switch between different Linear teams
-- **View filtering** - Filter issues by status (All, In Review, In Progress, etc.)
+- **View filtering** - Filter issues by status (Open, All, In Review, In Progress, etc.)
 - **Personal filter** - View only issues assigned to you
 - **Search** - Search issues by title
 - **Full CRUD operations** - Create, read, update issues and add comments
@@ -110,6 +110,7 @@ When editing or creating issues:
 - **Clipboard integration** - Copy issue URLs and git branch names
 - **Visual indicators** - Color-coded states and priority icons
 - **Issue details** - View full issue description and comments
+- **Inline images** - Images in descriptions and comments render in the inspector on terminals with the kitty graphics protocol (kitty, Ghostty). Set `LAZYLINEAR_IMAGES=0` to turn them off
 
 ## Keyboard Shortcuts Reference
 
