@@ -22,6 +22,12 @@ import (
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// Selected row colors in panes without focus. With 256-color output, attribute n is palette color n-1.
+const (
+	unfocusedSelFgColor = gocui.Attribute(252 + 1)
+	unfocusedSelBgColor = gocui.Attribute(238 + 1)
+)
+
 // overlayViews are the popups and messages drawn over the panes
 var overlayViews = []string{
 	"toast", "search", "help", "image", "status", "priority", "comment", "assignee",
@@ -795,8 +801,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		nv.SelBgColor = gocui.ColorGreen
-		nv.SelFgColor = gocui.ColorBlack
+		nv.Highlight = true
 	}
 	nv.Title = "1 Navigation"
 
@@ -828,13 +833,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Highlight = true
-		v.SelBgColor = gocui.ColorGreen
-		v.SelFgColor = gocui.ColorBlack
 	}
 	v.Highlight = true
-	v.SelBgColor = gocui.ColorGreen
-	v.SelFgColor = gocui.ColorBlack
 
 	viewTitle := "2 " + ui.views[ui.currentView]
 	if view := ui.customView(ui.currentCustomView); view != nil {
@@ -1040,8 +1040,17 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.Cursor = false
 	}
 
-	// Update navigation content
+	// The focused pane shows its selected row in green and the others in gray
 	currentView := g.CurrentView()
+	for _, sv := range []*gocui.View{nv, v} {
+		if currentView != nil && currentView.Name() == sv.Name() {
+			sv.SelFgColor, sv.SelBgColor = gocui.ColorBlack, gocui.ColorGreen
+		} else {
+			sv.SelFgColor, sv.SelBgColor = unfocusedSelFgColor, unfocusedSelBgColor
+		}
+	}
+
+	// Update navigation content
 	ui.navItems = ui.buildNavItems()
 	if ui.navCursor >= len(ui.navItems) || ui.navItems[ui.navCursor].kind == "header" {
 		ui.navCursor = ui.nextNavItem(-1, 1)
@@ -1059,7 +1068,6 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	}
 	nv.SetOrigin(0, navOy)
 	nv.SetCursor(0, ui.navCursor-navOy)
-	nv.Highlight = currentView != nil && currentView.Name() == "nav"
 
 	// Issue details (right side)
 	dv, err := g.SetView("details", detailsX0, topY, maxX-1, bottomY)
