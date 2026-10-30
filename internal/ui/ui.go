@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/benwyrosdick/lazylinear/internal/api"
+	"github.com/benwyrosdick/lazylinear/internal/config"
 	"github.com/charmbracelet/glamour"
 	"github.com/jroimartin/gocui"
 	"github.com/muesli/termenv"
@@ -20,6 +21,12 @@ import (
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// overlayViews are the popups and messages drawn over the panes
+var overlayViews = []string{
+	"toast", "search", "help", "image", "status", "priority", "comment", "assignee",
+	"edit_title", "edit_description", "create_title", "create_description",
+}
 
 // navItem is a row in the navigation pane
 type navItem struct {
@@ -561,8 +568,22 @@ func NewUI(client *api.Client) (*UI, error) {
 	// Start spinner animation
 	ui.startSpinner()
 
+	// Reopen the view the app was last left on; a missing or unreadable state file starts fresh
+	state, err := config.LoadState()
+	if err != nil {
+		state = &config.State{}
+	}
+	for i, name := range ui.views {
+		if name == state.Status {
+			ui.currentView = i
+		}
+	}
+	ui.assignedToMe = state.MyIssues
+	ui.projectFilter = state.ProjectID
+	ui.currentCustomView = state.CustomViewID
+
 	// Load data in background
-	go ui.loadData()
+	go ui.loadData(state.TeamID, state.CustomViewID, ui.showClosed())
 
 	return ui, nil
 }
@@ -579,7 +600,31 @@ func (ui *UI) Run() error {
 		ui.closeImages()
 		ui.gui.Close()
 	}()
-	return ui.gui.MainLoop()
+
+	err := ui.gui.MainLoop()
+	if err == gocui.ErrQuit {
+		err = nil
+	}
+	if saveErr := ui.saveState(); saveErr != nil && err == nil {
+		err = fmt.Errorf("saving view state: %w", saveErr)
+	}
+	return err
+}
+
+// saveState remembers the current team and filters so the next launch reopens them
+func (ui *UI) saveState() error {
+	// Without loaded teams there is nothing meaningful to save, and saving would forget the last view
+	if ui.loading || ui.currentTeam < 0 || ui.currentTeam >= len(ui.teams) {
+		return nil
+	}
+	state := config.State{
+		TeamID:       ui.teams[ui.currentTeam].ID,
+		Status:       ui.views[ui.currentView],
+		CustomViewID: ui.currentCustomView,
+		ProjectID:    ui.projectFilter,
+		MyIssues:     ui.assignedToMe,
+	}
+	return state.Save()
 }
 
 // Close closes the UI
@@ -1165,14 +1210,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			}
 		}
 
-		// Images are drawn over the blank rows reserved for them, except under modals and the toast
-		modalOpen := ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp
-		if ui.tty != nil && !modalOpen {
-			clipY := bottomY
-			if ui.toastMessage != "" {
-				clipY = bottomY - 3
-			}
-			placements = ui.inspectorImagePlacements(content.String(), dv, detailsX0, topY, clipY)
+		// Images are drawn over the blank rows reserved for them
+		if ui.tty != nil {
+			placements = ui.inspectorImagePlacements(content.String(), dv, detailsX0, topY)
 		}
 		fmt.Fprint(dv, imageTokenPattern.ReplaceAllStringFunc(content.String(), func(token string) string {
 			return strings.Repeat(" ", len(token))
@@ -1181,12 +1221,6 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "Select an issue to view details")
 		fmt.Fprintln(dv, "Press '?' for help")
 	}
-	if ui.viewedImage != nil {
-		// Inline images stay visible around the viewer, but not under it or its frame
-		viewer := ui.imageModalPlacement(maxX, maxY)
-		placements = append(cutOut(placements, viewer.x-1, viewer.y-1, viewer.cols+2, viewer.rows+2), viewer)
-	}
-	ui.drawImages(placements)
 
 	// Keybindings bar (bottom)
 	if v, err := g.SetView("keybindings", 0, maxY-2, maxX-1, maxY); err != nil {
@@ -1323,7 +1357,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  Ctrl+C  : Quit")
 			fmt.Fprintln(hv, "")
 			fmt.Fprintln(hv, "Configuration:")
-			fmt.Fprintln(hv, "  Set your Linear API key in ~/.lazylinear/config.json")
+			fmt.Fprintln(hv, "  Set your Linear API key in ~/.config/lazylinear/config.json")
 		}
 	} else {
 		g.DeleteView("help")
@@ -1660,6 +1694,17 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		g.DeleteView("create_title")
 		g.DeleteView("create_description")
 	}
+
+	// Images draw above text, so cut inline images out of every popup on screen
+	for _, name := range overlayViews {
+		if x0, y0, x1, y1, err := g.ViewPosition(name); err == nil {
+			placements = cutOut(placements, x0, y0, x1-x0+1, y1-y0+1)
+		}
+	}
+	if ui.viewedImage != nil {
+		placements = append(placements, ui.imageModalPlacement(maxX, maxY))
+	}
+	ui.drawImages(placements)
 
 	return nil
 }
@@ -2660,7 +2705,8 @@ func (ui *UI) startSpinner() {
 }
 
 // loadData loads teams and issues in the background
-func (ui *UI) loadData() {
+// loadData fetches the initial data, opening the saved team and custom view when they still exist
+func (ui *UI) loadData(teamID string, customViewID string, includeClosed bool) {
 	var issues []api.Issue
 	var teams []api.Team
 	var viewerID string
@@ -2669,6 +2715,7 @@ func (ui *UI) loadData() {
 	var teamIssueCounts map[string]int
 	var apiErr error
 	var fetchedIssues []api.Issue
+	teamIndex := 0
 
 	if ui.client != nil {
 		ctx := context.Background()
@@ -2693,11 +2740,26 @@ func (ui *UI) loadData() {
 		if fetchedTeams, err := ui.client.GetTeams(ctx); err == nil {
 			teams = fetchedTeams
 		}
-		teamID := ""
-		if len(teams) > 0 {
-			teamID = teams[0].ID
+		teamIndex = 0
+		for i, team := range teams {
+			if team.ID == teamID {
+				teamIndex = i
+			}
 		}
-		fetchedIssues, apiErr = ui.client.GetIssues(ctx, teamID, false)
+		teamID = ""
+		if len(teams) > 0 {
+			teamID = teams[teamIndex].ID
+		}
+		if customViewID != "" && teamID != "" {
+			fetchedIssues, apiErr = ui.client.GetCustomViewIssues(ctx, customViewID, teamID)
+			if apiErr != nil {
+				// The saved view may have been deleted; fall back to the team's issues
+				customViewID = ""
+			}
+		}
+		if customViewID == "" {
+			fetchedIssues, apiErr = ui.client.GetIssues(ctx, teamID, includeClosed)
+		}
 		wg.Wait()
 	} else {
 		apiErr = fmt.Errorf("no client")
@@ -2711,21 +2773,31 @@ func (ui *UI) loadData() {
 
 	var availableStatuses []string
 	if len(teams) > 0 {
-		for _, state := range teams[0].States {
+		for _, state := range teams[teamIndex].States {
 			availableStatuses = append(availableStatuses, state.Name)
 		}
 	}
 
 	// Update UI with loaded data
 	ui.gui.Update(func(g *gocui.Gui) error {
-		ui.issues = issues
 		ui.allIssues = issues
 		ui.teams = teams
+		ui.currentTeam = teamIndex
+		ui.currentCustomView = customViewID
+		ui.closedLoaded = customViewID != "" || includeClosed
+		if ui.projectFilter != "" && ui.projectName(ui.projectFilter) == "" {
+			ui.projectFilter = ""
+		}
 		ui.viewerID = viewerID
 		ui.viewerName = viewerName
 		ui.customViews = customViews
 		ui.teamIssueCounts = teamIssueCounts
 		ui.availableStatuses = availableStatuses
+		ui.issues = ui.filterIssues()
+		if apiErr != nil {
+			// Show the error row whatever the restored filters are
+			ui.issues = issues
+		}
 		if apiErr == nil {
 			ui.lastSynced = time.Now()
 		}

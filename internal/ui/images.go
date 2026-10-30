@@ -224,11 +224,11 @@ func encodePNG(data []byte) ([]byte, int, int, error) {
 }
 
 // inspectorImagePlacements finds where each image token lands in the wrapped inspector
-// content and crops each image to the rows visible between the view's top and clipY
-func (ui *UI) inspectorImagePlacements(content string, v *gocui.View, x0, y0, clipY int) []imagePlacement {
+// content and crops each image to the rows visible in the view
+func (ui *UI) inspectorImagePlacements(content string, v *gocui.View, x0, y0 int) []imagePlacement {
 	width, height := v.Size()
 	_, oy := v.Origin()
-	visibleEnd := min(oy+height, oy+clipY-(y0+1))
+	visibleEnd := oy + height
 
 	var placements []imagePlacement
 	row := 0

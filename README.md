@@ -38,7 +38,7 @@ sudo mv lazylinear /usr/local/bin/
 
 ## Configuration
 
-Create a configuration file at `~/.lazylinear/config.json`:
+Create a configuration file at `~/.config/lazylinear/config.json` (or `$XDG_CONFIG_HOME/lazylinear/config.json`):
 
 ```json
 {
@@ -50,6 +50,10 @@ To get your Linear API key:
 1. Go to [Linear Settings](https://linear.app/settings/api)
 2. Create a new Personal API Key
 3. Copy the key and paste it into your config file
+
+A config at the old location, `~/.lazylinear/config.json`, is moved to the new one the next time lazylinear starts.
+
+lazylinear remembers the team, status, view, project, and "my issues" filter you were on when you quit, and reopens them next time. They are saved in `~/.local/state/lazylinear/state.json` (or `$XDG_STATE_HOME/lazylinear/state.json`).
 
 ## Usage
 
