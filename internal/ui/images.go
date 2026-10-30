@@ -50,15 +50,19 @@ type imageRef struct {
 	cols int
 }
 
-// imagePlacement is an image drawn at a screen cell, cropped to its visible rows
+// imagePlacement is part of an image drawn at a screen cell: the source pixels
+// cropX, cropY, cropW, cropH scaled to fill cols by rows cells
 type imagePlacement struct {
 	image     *inlineImage
+	label     string
 	placement int
 	x         int
 	y         int
 	cols      int
 	rows      int
+	cropX     int
 	cropY     int
+	cropW     int
 	cropH     int
 }
 
@@ -130,14 +134,19 @@ func (ui *UI) imageLines(index int, indent int) []string {
 		return []string{padding + "\033[38;5;245mImage: " + label + reason + " → " + ref.url + "\033[0m"}
 	}
 
-	cellW, cellH := ui.cellWidth, ui.cellHeight
-	if cellW == 0 || cellH == 0 {
-		cellW, cellH = 10, 20
-	}
+	cellW, cellH := ui.cellSize()
 	ref.cols, ref.rows = imageSize(img.width, img.height, cellW, cellH, maxCols, max(ui.mdHeight-1, 1))
 	lines := make([]string, ref.rows)
 	lines[0] = padding + imageToken(index)
 	return lines
+}
+
+// cellSize returns the terminal cell size in pixels, guessing when the terminal doesn't report it
+func (ui *UI) cellSize() (int, int) {
+	if ui.cellWidth == 0 || ui.cellHeight == 0 {
+		return 10, 20
+	}
+	return ui.cellWidth, ui.cellHeight
 }
 
 func imageToken(index int) string {
@@ -236,14 +245,15 @@ func (ui *UI) inspectorImagePlacements(content string, v *gocui.View, x0, y0, cl
 				start, end := max(row, oy), min(row+ref.rows, visibleEnd)
 				if img != nil && img.err == nil && ref.rows > 0 && end > start {
 					placements = append(placements, imagePlacement{
-						image:     img,
-						placement: len(placements) + 1,
-						x:         x0 + 1 + utf8.RuneCountInString(plain[:match[0]]),
-						y:         y0 + 1 + start - oy,
-						cols:      ref.cols,
-						rows:      end - start,
-						cropY:     (start - row) * img.height / ref.rows,
-						cropH:     max((end-start)*img.height/ref.rows, 1),
+						image: img,
+						label: ref.alt,
+						x:     x0 + 1 + utf8.RuneCountInString(plain[:match[0]]),
+						y:     y0 + 1 + start - oy,
+						cols:  ref.cols,
+						rows:  end - start,
+						cropY: (start - row) * img.height / ref.rows,
+						cropW: img.width,
+						cropH: max((end-start)*img.height/ref.rows, 1),
 					})
 				}
 			}
@@ -251,6 +261,40 @@ func (ui *UI) inspectorImagePlacements(content string, v *gocui.View, x0, y0, cl
 		row += wrappedRows(plain, width)
 	}
 	return placements
+}
+
+// cutOut splits placements around the screen rectangle x, y, w, h so that no image is drawn inside it
+func cutOut(placements []imagePlacement, x, y, w, h int) []imagePlacement {
+	var out []imagePlacement
+	for _, p := range placements {
+		// The rows and columns of p, from its top-left cell, that the rectangle covers
+		top, bottom := min(max(y-p.y, 0), p.rows), min(max(y+h-p.y, 0), p.rows)
+		left, right := min(max(x-p.x, 0), p.cols), min(max(x+w-p.x, 0), p.cols)
+		if top == bottom || left == right {
+			out = append(out, p)
+			continue
+		}
+		out = appendPiece(out, p, 0, 0, p.cols, top)
+		out = appendPiece(out, p, 0, bottom, p.cols, p.rows)
+		out = appendPiece(out, p, 0, top, left, bottom)
+		out = appendPiece(out, p, right, top, p.cols, bottom)
+	}
+	return out
+}
+
+// appendPiece appends the part of p covering columns c0 to c1 and rows r0 to r1, if it isn't empty
+func appendPiece(out []imagePlacement, p imagePlacement, c0, r0, c1, r1 int) []imagePlacement {
+	if c1 <= c0 || r1 <= r0 {
+		return out
+	}
+	piece := p
+	piece.x, piece.y = p.x+c0, p.y+r0
+	piece.cols, piece.rows = c1-c0, r1-r0
+	piece.cropX = p.cropX + c0*p.cropW/p.cols
+	piece.cropY = p.cropY + r0*p.cropH/p.rows
+	piece.cropW = max((c1-c0)*p.cropW/p.cols, 1)
+	piece.cropH = max((r1-r0)*p.cropH/p.rows, 1)
+	return append(out, piece)
 }
 
 // wrappedRows counts the rows gocui uses for a line in a wrapping view of the given width
@@ -269,6 +313,9 @@ func (ui *UI) drawImages(placements []imagePlacement) {
 		return
 	}
 	ui.redrawImages = false
+	for i := range placements {
+		placements[i].placement = i + 1
+	}
 
 	var b strings.Builder
 	b.WriteString("\x1b7")
@@ -280,8 +327,8 @@ func (ui *UI) drawImages(placements []imagePlacement) {
 			writeImageData(&b, p.image)
 			p.image.transmitted = true
 		}
-		fmt.Fprintf(&b, "\x1b[%d;%dH\x1b_Ga=p,i=%d,p=%d,y=%d,h=%d,c=%d,r=%d,C=1,q=2\x1b\\",
-			p.y+1, p.x+1, p.image.id, p.placement, p.cropY, p.cropH, p.cols, p.rows)
+		fmt.Fprintf(&b, "\x1b[%d;%dH\x1b_Ga=p,i=%d,p=%d,x=%d,y=%d,w=%d,h=%d,c=%d,r=%d,C=1,q=2\x1b\\",
+			p.y+1, p.x+1, p.image.id, p.placement, p.cropX, p.cropY, p.cropW, p.cropH, p.cols, p.rows)
 	}
 	b.WriteString("\x1b8")
 	ui.tty.WriteString(b.String())
@@ -322,4 +369,61 @@ func (ui *UI) closeImages() {
 	ui.tty.WriteString(b.String())
 	ui.tty.Close()
 	ui.tty = nil
+}
+
+// openImageAt opens the image viewer when the screen cell x, y is on an inline image
+func (ui *UI) openImageAt(x, y int) bool {
+	for _, p := range ui.placedImages {
+		if x >= p.x && x < p.x+p.cols && y >= p.y && y < p.y+p.rows {
+			viewed := p
+			ui.viewedImage = &viewed
+			return true
+		}
+	}
+	return false
+}
+
+func (ui *UI) closeImage(g *gocui.Gui, v *gocui.View) error {
+	ui.viewedImage = nil
+	g.SetCurrentView("details")
+	return nil
+}
+
+// imageModalPlacement centers the viewed image at 100% size, or shrunk to fit the screen if that is smaller
+func (ui *UI) imageModalPlacement(maxX, maxY int) imagePlacement {
+	img := ui.viewedImage.image
+	cellW, cellH := ui.cellSize()
+	cols, rows := imageSize(img.width, img.height, cellW, cellH, max(maxX-4, 1), max(maxY-4, 1))
+	return imagePlacement{
+		image: img,
+		label: ui.viewedImage.label,
+		x:     (maxX - cols) / 2,
+		y:     (maxY - rows) / 2,
+		cols:  cols,
+		rows:  rows,
+		cropW: img.width,
+		cropH: img.height,
+	}
+}
+
+// imageModalTitle names the viewed image and its zoom level, fitting the frame width
+func (ui *UI) imageModalTitle(p imagePlacement) string {
+	cellW, _ := ui.cellSize()
+	zoom := min(100, int(math.Round(float64(p.cols*cellW)*100/float64(p.image.width))))
+	suffix := fmt.Sprintf(" - %d%% (esc to close)", zoom)
+
+	// gocui positions title characters by byte, so keep the label ASCII
+	label := strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return -1
+		}
+		return r
+	}, p.label)
+	if label == "" {
+		label = "Image"
+	}
+	if room := p.cols - len(suffix) - 1; len(label) > room {
+		label = label[:max(room, 0)]
+	}
+	return label + suffix
 }

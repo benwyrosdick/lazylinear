@@ -103,6 +103,7 @@ type UI struct {
 	nextImageID       uint32
 	inspectorImages   []imageRef
 	placedImages      []imagePlacement
+	viewedImage       *imagePlacement
 	redrawImages      bool
 	mdHeight          int
 	screenWidth       int
@@ -303,6 +304,12 @@ func NewUI(client *api.Client) (*UI, error) {
 		return nil, err
 	}
 	if err := g.SetKeybinding("help", gocui.KeyEsc, gocui.ModNone, ui.toggleHelp); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("image", gocui.KeyEsc, gocui.ModNone, ui.closeImage); err != nil {
+		return nil, err
+	}
+	if err := g.SetKeybinding("image", gocui.MouseLeft, gocui.ModNone, ui.closeImage); err != nil {
 		return nil, err
 	}
 	if err := g.SetKeybinding("status", gocui.KeyArrowDown, gocui.ModNone, ui.statusDown); err != nil {
@@ -966,6 +973,9 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	} else if ui.showHelp {
 		g.SetCurrentView("help")
 		g.Cursor = false
+	} else if ui.viewedImage != nil {
+		g.SetCurrentView("image")
+		g.Cursor = false
 	} else if ui.showStatus {
 		g.SetCurrentView("status")
 		g.Cursor = false
@@ -1171,6 +1181,11 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		fmt.Fprintln(dv, "Select an issue to view details")
 		fmt.Fprintln(dv, "Press '?' for help")
 	}
+	if ui.viewedImage != nil {
+		// Inline images stay visible around the viewer, but not under it or its frame
+		viewer := ui.imageModalPlacement(maxX, maxY)
+		placements = append(cutOut(placements, viewer.x-1, viewer.y-1, viewer.cols+2, viewer.rows+2), viewer)
+	}
 	ui.drawImages(placements)
 
 	// Keybindings bar (bottom)
@@ -1196,6 +1211,8 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			keybindings = [][2]string{{"tab", "switch pane"}, {"ctrl+s", "create"}, {"esc", "cancel"}}
 		} else if ui.showHelp {
 			keybindings = [][2]string{{"?/esc", "close"}}
+		} else if ui.viewedImage != nil {
+			keybindings = [][2]string{{"esc", "close"}}
 		} else if currentView != nil && currentView.Name() == "nav" {
 			keybindings = [][2]string{{"j/k", "move"}, {"enter", "select"}, {"l", "issues"}, {"m", "my issues"}, {"/", "search"}, {"r", "refresh"}, {"tab", "pane"}, {"?", "help"}, {"ctrl+c", "quit"}}
 		} else if currentView != nil && currentView.Name() == "details" {
@@ -1254,7 +1271,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 	// Help modal (if enabled)
 	if ui.showHelp {
 		helpWidth := maxX - 20
-		helpHeight := 34
+		helpHeight := 35
 		if helpHeight > maxY-2 {
 			helpHeight = maxY - 2
 		}
@@ -1286,6 +1303,7 @@ func (ui *UI) layout(g *gocui.Gui) error {
 			fmt.Fprintln(hv, "  h / l   : Move focus left / right")
 			fmt.Fprintln(hv, "  enter   : Select navigation item / inspect issue")
 			fmt.Fprintln(hv, "  drag    : Drag the lines between panes to resize them")
+			fmt.Fprintln(hv, "  click   : Click an image in the inspector to view it full size")
 			fmt.Fprintln(hv, "")
 			fmt.Fprintln(hv, "Actions:")
 			fmt.Fprintln(hv, "  r       : Refresh issues")
@@ -1309,6 +1327,19 @@ func (ui *UI) layout(g *gocui.Gui) error {
 		}
 	} else {
 		g.DeleteView("help")
+	}
+
+	// Image viewer (if an inline image was clicked)
+	if ui.viewedImage != nil {
+		p := ui.imageModalPlacement(maxX, maxY)
+		iv, err := g.SetView("image", p.x-1, p.y-1, p.x+p.cols, p.y+p.rows)
+		if err != nil && err != gocui.ErrUnknownView {
+			return err
+		}
+		iv.Title = ui.imageModalTitle(p)
+		g.SetCurrentView("image")
+	} else {
+		g.DeleteView("image")
 	}
 
 	// Status pane (if enabled)
@@ -2490,7 +2521,7 @@ func (ui *UI) clickEditDescription(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) clickIssues(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.viewedImage != nil {
 		return nil
 	}
 	if v != nil {
@@ -2728,6 +2759,9 @@ func (ui *UI) focusIssues(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) scrollDetailsDown(g *gocui.Gui, v *gocui.View) error {
+	if ui.viewedImage != nil {
+		return nil
+	}
 	if v != nil {
 		_, viewHeight := v.Size()
 		lines := len(v.ViewBufferLines())
@@ -2743,6 +2777,9 @@ func (ui *UI) scrollDetailsDown(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) scrollDetailsUp(g *gocui.Gui, v *gocui.View) error {
+	if ui.viewedImage != nil {
+		return nil
+	}
 	if v != nil {
 		ox, oy := v.Origin()
 		if oy > 0 {
@@ -2755,6 +2792,9 @@ func (ui *UI) scrollDetailsUp(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) scrollIssuesDown(g *gocui.Gui, v *gocui.View) error {
+	if ui.viewedImage != nil {
+		return nil
+	}
 	if v != nil && len(ui.issues) > 0 {
 		ox, oy := v.Origin()
 		_, viewHeight := v.Size()
@@ -2779,6 +2819,9 @@ func (ui *UI) scrollIssuesDown(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) scrollIssuesUp(g *gocui.Gui, v *gocui.View) error {
+	if ui.viewedImage != nil {
+		return nil
+	}
 	if v != nil && len(ui.issues) > 0 {
 		ox, oy := v.Origin()
 		_, viewHeight := v.Size()
@@ -2803,7 +2846,10 @@ func (ui *UI) scrollIssuesUp(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) clickDetails(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.viewedImage != nil {
+		return nil
+	}
+	if ui.openImageAt(mouseX(g, v), mouseY(g, v)) {
 		return nil
 	}
 	return ui.focusDetails(g, v)
@@ -3069,7 +3115,7 @@ func (ui *UI) navSelect(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (ui *UI) clickNav(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.viewedImage != nil {
 		return nil
 	}
 	g.SetCurrentView("nav")
@@ -3191,7 +3237,7 @@ func hexTo256(hex string) string {
 }
 
 func (ui *UI) startResize(g *gocui.Gui, v *gocui.View) error {
-	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp {
+	if ui.showEdit || ui.showCreate || ui.showComment || ui.showStatus || ui.showPriority || ui.showAssignee || ui.showHelp || ui.viewedImage != nil {
 		return nil
 	}
 	// The gutter covers two border columns; remember which one was grabbed
@@ -3228,4 +3274,14 @@ func mouseX(g *gocui.Gui, v *gocui.View) int {
 	}
 	cx, _ := v.Cursor()
 	return x0 + 1 + cx
+}
+
+// mouseY returns the screen row of the last mouse event on v
+func mouseY(g *gocui.Gui, v *gocui.View) int {
+	_, y0, _, _, err := g.ViewPosition(v.Name())
+	if err != nil {
+		return 0
+	}
+	_, cy := v.Cursor()
+	return y0 + 1 + cy
 }
