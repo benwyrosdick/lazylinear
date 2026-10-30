@@ -1,0 +1,31 @@
+internal/ui/images_test.go
+  s_aaaad71025521a::t_d731cdadac5223 41-68
+internal/ui/ui.go
+  s_aaaad71025521a::t_3f96b80904df27 1185-1187
+  s_aaaad71025521a::t_a38da9373633d3 1274
+  s_aaaad71025521a::t_9a885501973fe2 1306
+  s_aaaad71025521a::t_2ee8a6c4a6aa5f 2762-2764,2780-2782,2795-2797,2822-2824
+  s_aaaad71025521a::t_d763b331869ec2 106,309-314,976-978,1184,1188,1214-1215,1332-1344,2524,2849-2852,3118,3240,3278-3286
+  s_aaaad71025521a::t_dc6d738e66838d 3287
+internal/ui/images.go
+  s_aaaad71025521a::t_3f96b80904df27 53-54,63,65,266-299,316-318,330-331
+  s_aaaad71025521a::t_1ed89605fffdaa 57,137,144-150,373-397,406-429
+  s_aaaad71025521a::t_d731cdadac5223 248-256,398-405
+  s_aaaad71025521a::t_99033fcac9c448 151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd20207265c7cfc0b8b20bcf1fbb3733a80a4607",
+  "prompts": {},
+  "sessions": {
+    "s_aaaad71025521a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97e09551-7d3b-440f-aa43-4804bd954f8f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Ben Wyrosdick <ben.wyrosdick@gmail.com>"
+    }
+  }
+}
